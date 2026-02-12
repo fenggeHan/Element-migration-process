@@ -429,10 +429,11 @@ def main():
             with col_csv:
                 st.download_button(
                     label="导出CSV数据",
-                    data=st.session_state.concentration_data,
-                    file_name=f"{st.session_state.current_scene['name']}_浓度数据.csv",
-                    mime="text/csv"
+                    data=st.session_state.concentration_data.getvalue().encode('utf-8'),           
+                    file_name=f"{st.session_state.current_scene['name']}.csv",
+                    mime="text/csv" "
                 )
+                
             with col_vtk:
                 # 生成VTK数据
                 vis = ResultVisualization(st.session_state.sim)
@@ -481,3 +482,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
