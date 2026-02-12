@@ -481,10 +481,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-'''streamlit==1.36.0
-numpy==1.26.4
-matplotlib==3.10.6
-pandas==2.2.3
-scipy==1.12.0'''
