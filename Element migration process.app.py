@@ -429,9 +429,9 @@ def main():
             with col_csv:
                 st.download_button(
                     label="导出CSV数据",
-                    data=st.session_state.concentration_data.getvalue().encode('utf-8'),           
+                    data=st.session_state.concentration_data,           
                     file_name=f"{st.session_state.current_scene['name']}.csv",
-                    mime="text/csv" "
+                    mime="text/csv" 
                 )
                 
             with col_vtk:
@@ -482,4 +482,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
