@@ -8,8 +8,11 @@ from typing import Dict, List, Tuple
 import pandas as pd
 
 # ===================== 全局配置 =====================
-plt.rcParams["font.sans-serif"] = ["SimHei"]  # 解决中文显示问题
-plt.rcParams["axes.unicode_minus"] = False
+# 优化字体配置（解决中文显示问题，增加备用字体确保兼容性）
+plt.rcParams["font.family"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]  # 优先中文字体，备用西文字体
+plt.rcParams["font.size"] = 10  # 统一字体大小
+plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
+plt.rcParams["figure.dpi"] = 100  # 提升图片清晰度
 st.set_page_config(
     page_title="地球化学元素迁移虚拟仿真平台",
     page_icon="🌍",
@@ -96,8 +99,12 @@ class SceneManager:
             "au_hydrothermal": {
                 "name": "热液蚀变Au富集",
                 "initial_concentration": 0.01,  # ppm
-                "temperature_range": (200, 300),  # ℃
-                "ph_range": (4.5, 6.0),
+                "temperature_range": (100, 400),  # 拓宽温度范围：原200-300 → 100-400℃
+                "ph_range": (2.0, 8.0),  # 拓宽pH范围：原4.5-6.0 → 2.0-8.0
+                "pressure_range": (10, 100),  # 新增：压力范围 (MPa)
+                "eh_range": (-200, 400),  # 新增：氧化还原电位 (mV)
+                "sulfur_content_range": (0.01, 1.0),  # 新增：硫含量 (wt%)
+                "chlorine_content_range": (0.1, 10.0),  # 新增：氯含量 (wt%)
                 "time_range": (100, 10000),  # 小时
                 "dt": 1.0,  # 时间步长（小时）
                 "diffusion_coeff": 1e-6,
@@ -271,13 +278,17 @@ def main():
         st.session_state.scene_manager = SceneManager()
     if "teaching_manager" not in st.session_state:
         st.session_state.teaching_manager = TeachingManagement()
-        # 初始化默认教学任务
+        # 初始化默认教学任务（适配新增参数）
         st.session_state.teaching_manager.create_task(
             task_id="GEOCHEM_TASK_001",
             scene_name="au_hydrothermal",
             param_ranges={
-                "temperature": (200, 300),
-                "ph": (4.5, 6.0),
+                "temperature": (100, 400),
+                "ph": (2.0, 8.0),
+                "pressure": (10, 100),
+                "eh": (-200, 400),
+                "sulfur_content": (0.01, 1.0),
+                "chlorine_content": (0.1, 10.0),
                 "time_steps": (100, 10000)
             },
             deadline="2024-12-31"
@@ -324,6 +335,8 @@ def main():
         # 2. 参数调整（仅当加载场景后显示）
         if st.session_state.current_scene:
             st.subheader("⚙️ 参数调整")
+            
+            # 基础参数：温度、pH（所有场景通用）
             temperature = st.slider(
                 "温度 (℃)",
                 min_value=st.session_state.current_scene["temperature_range"][0],
@@ -337,6 +350,45 @@ def main():
                 value=float(np.mean(st.session_state.current_scene["ph_range"])),
                 step=0.1
             )
+
+            # 仅Au富集场景显示新增参数
+            additional_params = {}
+            if selected_scene_key == "au_hydrothermal":
+                pressure = st.slider(
+                    "压力 (MPa)",
+                    min_value=st.session_state.current_scene["pressure_range"][0],
+                    max_value=st.session_state.current_scene["pressure_range"][1],
+                    value=int(np.mean(st.session_state.current_scene["pressure_range"]))
+                )
+                eh = st.slider(
+                    "氧化还原电位 (mV)",
+                    min_value=st.session_state.current_scene["eh_range"][0],
+                    max_value=st.session_state.current_scene["eh_range"][1],
+                    value=int(np.mean(st.session_state.current_scene["eh_range"]))
+                )
+                sulfur_content = st.slider(
+                    "硫含量 (wt%)",
+                    min_value=st.session_state.current_scene["sulfur_content_range"][0],
+                    max_value=st.session_state.current_scene["sulfur_content_range"][1],
+                    value=float(np.mean(st.session_state.current_scene["sulfur_content_range"])),
+                    step=0.01
+                )
+                chlorine_content = st.slider(
+                    "氯含量 (wt%)",
+                    min_value=st.session_state.current_scene["chlorine_content_range"][0],
+                    max_value=st.session_state.current_scene["chlorine_content_range"][1],
+                    value=float(np.mean(st.session_state.current_scene["chlorine_content_range"])),
+                    step=0.1
+                )
+                # 保存新增参数
+                additional_params = {
+                    "pressure": pressure,
+                    "eh": eh,
+                    "sulfur_content": sulfur_content,
+                    "chlorine_content": chlorine_content
+                }
+
+            # 时间步长参数
             time_steps = st.slider(
                 "模拟时间步长",
                 min_value=int(st.session_state.current_scene["time_range"][0] // st.session_state.current_scene["dt"]),
@@ -344,11 +396,12 @@ def main():
                 value=int(st.session_state.current_scene["time_range"][1] // st.session_state.current_scene["dt"])
             )
 
-            # 保存参数到会话状态
+            # 保存所有参数到会话状态（合并基础参数+新增参数）
             st.session_state.params = {
                 "temperature": temperature,
                 "ph": ph,
-                "time_steps": time_steps
+                "time_steps": time_steps,
+                **additional_params  # 合并新增参数
             }
 
             # 3. 运行模拟按钮
@@ -482,5 +535,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
