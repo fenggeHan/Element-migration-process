@@ -8,11 +8,13 @@ from typing import Dict, List, Tuple
 import pandas as pd
 
 # ===================== 全局配置 =====================
-# 优化字体配置（解决中文显示问题，增加备用字体确保兼容性）
-plt.rcParams["font.family"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]  # 优先中文字体，备用西文字体
-plt.rcParams["font.size"] = 10  # 统一字体大小
-plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示问题
-plt.rcParams["figure.dpi"] = 100  # 提升图片清晰度
+# 深度优化跨平台字体配置（解决中文显示问题）
+plt.rcParams["font.family"] = ["SimHei", "Microsoft YaHei", "PingFang SC", "WenQuanYi Micro Hei", "DejaVu Sans"]
+plt.rcParams["font.size"] = 11  # 优化字体大小
+plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示
+plt.rcParams["figure.dpi"] = 150  # 提升图片清晰度
+plt.rcParams["savefig.dpi"] = 150
+plt.rcParams["figure.facecolor"] = "white"  # 避免透明背景导致的显示问题
 st.set_page_config(
     page_title="地球化学元素迁移虚拟仿真平台",
     page_icon="🌍",
@@ -59,6 +61,8 @@ class NumericalSimulation:
         # 更新浓度场
         self.concentration = self.forward_difference_time(self.concentration, diffusion_term + reaction_term)
         self.time += self.dt
+        # 确保浓度非负（物理意义约束）
+        self.concentration = np.clip(self.concentration, 0, None)
         return self.concentration
 
     def implicit_solver(self, diffusion_coeff: float, reaction_rate: float, max_iter: int = 10) -> np.ndarray:
@@ -76,8 +80,9 @@ class NumericalSimulation:
                                                           i, j - 1]) / self.dy ** 2
                                               )
                                               ) / (1 + self.dt * (
-                                2 * diffusion_coeff * (1 / self.dx ** 2 + 1 / self.dy ** 2) + reaction_rate))
+                            2 * diffusion_coeff * (1 / self.dx ** 2 + 1 / self.dy ** 2) + reaction_rate))
         self.concentration = new_concentration
+        self.concentration = np.clip(self.concentration, 0, None)
         self.time += self.dt
         return self.concentration
 
@@ -99,14 +104,14 @@ class SceneManager:
             "au_hydrothermal": {
                 "name": "热液蚀变Au富集",
                 "initial_concentration": 0.01,  # ppm
-                "temperature_range": (100, 400),  # 拓宽温度范围：原200-300 → 100-400℃
-                "ph_range": (2.0, 8.0),  # 拓宽pH范围：原4.5-6.0 → 2.0-8.0
-                "pressure_range": (10, 100),  # 新增：压力范围 (MPa)
-                "eh_range": (-200, 400),  # 新增：氧化还原电位 (mV)
-                "sulfur_content_range": (0.01, 1.0),  # 新增：硫含量 (wt%)
-                "chlorine_content_range": (0.1, 10.0),  # 新增：氯含量 (wt%)
-                "time_range": (100, 10000),  # 小时
-                "dt": 1.0,  # 时间步长（小时）
+                "temperature_range": (0, 1000),  # 调整：0-1000℃
+                "ph_range": (2.0, 8.0),
+                "pressure_range": (10, 1000),  # 调整：10-1000MPa
+                "eh_range": (-200, 400),
+                "sulfur_content_range": (0.01, 1.0),
+                "chlorine_content_range": (0.1, 10.0),
+                "time_range": (100, 20000),  # 模拟步长范围适配
+                "dt": 1.0,
                 "diffusion_coeff": 1e-6,
                 "reaction_rate": 1e-4,
                 "solver_type": "explicit"
@@ -115,8 +120,8 @@ class SceneManager:
                 "name": "风化淋滤Li流失",
                 "initial_concentration": 50,  # ppm
                 "ph_range": (3.0, 5.0),
-                "time_range": (1000, 100000),  # 年
-                "dt": 100.0,  # 时间步长（年）
+                "time_range": (1000, 100000),
+                "dt": 100.0,
                 "diffusion_coeff": 1e-7,
                 "reaction_rate": 1e-5,
                 "solver_type": "implicit"
@@ -141,25 +146,61 @@ class ResultVisualization:
         self.simulation = simulation
 
     def plot_contour(self, title: str = "浓度等值线图") -> plt.Figure:
-        """绘制浓度等值线图（返回matplotlib fig对象）"""
-        fig, ax = plt.subplots(figsize=(8, 6))
-        contour = ax.contourf(self.simulation.concentration, cmap='viridis', levels=20)
-        plt.colorbar(contour, ax=ax, label='浓度 (ppm)')
-        ax.set_title(title, fontsize=12)
-        ax.set_xlabel('空间坐标X')
-        ax.set_ylabel('空间坐标Y')
+        """重构等值线图绘制逻辑，确保显示正常"""
+        # 创建新的fig，避免缓存问题
+        fig, ax = plt.subplots(figsize=(10, 8), dpi=150, facecolor="white")
+
+        # 生成浓度等值线（优化levels，确保梯度显示）
+        min_c = np.min(self.simulation.concentration)
+        max_c = np.max(self.simulation.concentration)
+        # 自动生成合理的等值线层级
+        if max_c - min_c < 1e-6:  # 浓度无差异时，手动添加层级
+            levels = np.linspace(min_c, min_c + 0.02, 20)
+        else:
+            levels = np.linspace(min_c, max_c, 20)
+
+        # 绘制填充等值线
+        contour = ax.contourf(
+            self.simulation.concentration,
+            levels=levels,
+            cmap='viridis',
+            extend='both',  # 显示超出范围的颜色
+            alpha=0.8
+        )
+        # 添加等值线轮廓，增强可读性
+        ax.contour(
+            self.simulation.concentration,
+            levels=levels,
+            colors='white',
+            linewidths=0.5,
+            alpha=0.5
+        )
+
+        # 添加颜色条（优化标签）
+        cbar = plt.colorbar(contour, ax=ax, label='浓度 (ppm)', shrink=0.8)
+        cbar.ax.set_ylabel('浓度 (ppm)', fontsize=10)
+
+        # 设置标题和坐标轴（确保中文显示）
+        ax.set_title(title, fontsize=14, pad=20)
+        ax.set_xlabel('空间坐标X', fontsize=12)
+        ax.set_ylabel('空间坐标Y', fontsize=12)
+
+        # 优化刻度
+        ax.tick_params(axis='both', labelsize=10)
         plt.tight_layout()
+
         return fig
 
     def plot_time_series(self, time_points: List[float], concentrations: List[float],
                          title: str = "浓度-时间曲线") -> plt.Figure:
         """绘制浓度随时间变化曲线"""
-        fig, ax = plt.subplots(figsize=(8, 4))
-        ax.plot(time_points, concentrations, 'b-', linewidth=2)
-        ax.set_xlabel('时间')
-        ax.set_ylabel('平均浓度 (ppm)')
-        ax.set_title(title, fontsize=12)
-        ax.grid(True, alpha=0.3)
+        fig, ax = plt.subplots(figsize=(10, 4), dpi=150, facecolor="white")
+        ax.plot(time_points, concentrations, 'b-', linewidth=2, alpha=0.8)
+        ax.set_xlabel('时间', fontsize=12)
+        ax.set_ylabel('平均浓度 (ppm)', fontsize=12)
+        ax.set_title(title, fontsize=14, pad=10)
+        ax.grid(True, alpha=0.3, linestyle='--')
+        ax.tick_params(axis='both', labelsize=10)
         plt.tight_layout()
         return fig
 
@@ -169,14 +210,14 @@ class ResultVisualization:
         return max_concentration / initial_concentration if initial_concentration > 0 else 0.0
 
     def export_csv(self) -> StringIO:
-        """导出浓度场数据为CSV（返回内存文件对象）"""
+        """导出浓度场数据为CSV"""
         output = StringIO()
         writer = csv.writer(output)
         writer.writerow(['X坐标', 'Y坐标', '浓度(ppm)'])
         for i in range(self.simulation.domain_size[0]):
             for j in range(self.simulation.domain_size[1]):
                 writer.writerow([i, j, self.simulation.concentration[i, j]])
-        output.seek(0)  # 重置文件指针
+        output.seek(0)
         return output
 
     def export_vtk(self) -> StringIO:
@@ -204,8 +245,8 @@ class TeachingManagement:
     """教学任务管理与数据统计"""
 
     def __init__(self):
-        self.tasks: Dict[str, Dict] = {}  # 教学任务库
-        self.student_data: Dict[str, List[str]] = {}  # 学生学习数据
+        self.tasks: Dict[str, Dict] = {}
+        self.student_data: Dict[str, List[str]] = {}
 
     def create_task(self, task_id: str, scene_name: str, param_ranges: Dict, deadline: str) -> None:
         """创建教学实验任务"""
@@ -213,7 +254,7 @@ class TeachingManagement:
             "scene_name": scene_name,
             "param_ranges": param_ranges,
             "deadline": deadline,
-            "submissions": {}  # 学生提交记录
+            "submissions": {}
         }
 
     def submit_experiment(self, task_id: str, student_id: str, params: Dict, results: Dict) -> None:
@@ -224,7 +265,6 @@ class TeachingManagement:
                 "results": results,
                 "timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
             }
-            # 更新学生学习数据
             if student_id not in self.student_data:
                 self.student_data[student_id] = []
             self.student_data[student_id].append(task_id)
@@ -237,12 +277,10 @@ class TeachingManagement:
         submission = self.tasks[task_id]["submissions"][student_id]
         param_ranges = self.tasks[task_id]["param_ranges"]
 
-        # 检查参数是否在允许范围内
         params_valid = all(
             param_ranges[k][0] <= submission["params"][k] <= param_ranges[k][1]
-            for k in param_ranges
+            for k in param_ranges if k in submission["params"]
         )
-        # 检查结果合理性（富集系数>1为有效）
         results_valid = submission["results"]["enrichment_factor"] > 1.0
 
         if params_valid and results_valid:
@@ -271,25 +309,25 @@ class TeachingManagement:
 
 # ===================== 5. Streamlit 交互界面主逻辑 =====================
 def main():
-    # 初始化Streamlit会话状态（保存全局变量）
+    # 初始化会话状态
     if "sim" not in st.session_state:
         st.session_state.sim = NumericalSimulation(domain_size=(50, 50), dx=1.0, dy=1.0, dt=1.0)
     if "scene_manager" not in st.session_state:
         st.session_state.scene_manager = SceneManager()
     if "teaching_manager" not in st.session_state:
         st.session_state.teaching_manager = TeachingManagement()
-        # 初始化默认教学任务（适配新增参数）
+        # 初始化教学任务（适配新参数范围）
         st.session_state.teaching_manager.create_task(
             task_id="GEOCHEM_TASK_001",
             scene_name="au_hydrothermal",
             param_ranges={
-                "temperature": (100, 400),
+                "temperature": (0, 1000),
                 "ph": (2.0, 8.0),
-                "pressure": (10, 100),
+                "pressure": (10, 1000),
                 "eh": (-200, 400),
                 "sulfur_content": (0.01, 1.0),
                 "chlorine_content": (0.1, 10.0),
-                "time_steps": (100, 10000)
+                "time_steps": (100, 20000)
             },
             deadline="2024-12-31"
         )
@@ -319,68 +357,76 @@ def main():
             format_func=lambda x: scene_options[x]
         )
 
-        # 加载选中场景
+        # 加载选中场景（优化初始浓度场，增加中心点高浓度）
         if st.button("加载场景", type="primary"):
             st.session_state.current_scene = st.session_state.scene_manager.get_scene(selected_scene_key)
-            # 初始化浓度场
-            st.session_state.sim.concentration = np.full(
-                st.session_state.sim.domain_size,
-                st.session_state.current_scene["initial_concentration"]
-            )
-            st.session_state.sim.dt = st.session_state.current_scene["dt"]
+            # 初始化浓度场：中心点高浓度，形成梯度（解决等值线无差异问题）
+            sim = st.session_state.sim
+            initial_c = st.session_state.current_scene["initial_concentration"]
+            sim.concentration = np.full(sim.domain_size, initial_c)
+            # 中心点（25,25）设置高浓度
+            center_x, center_y = sim.domain_size[0] // 2, sim.domain_size[1] // 2
+            sim.concentration[center_x - 5:center_x + 5, center_y - 5:center_y + 5] = initial_c * 10
+            sim.dt = st.session_state.current_scene["dt"]
             st.success(f"成功加载场景：{st.session_state.current_scene['name']}")
 
         st.divider()
 
-        # 2. 参数调整（仅当加载场景后显示）
+        # 2. 参数调整
         if st.session_state.current_scene:
             st.subheader("⚙️ 参数调整")
-            
-            # 基础参数：温度、pH（所有场景通用）
+
+            # 温度（0-1000℃）
             temperature = st.slider(
                 "温度 (℃)",
                 min_value=st.session_state.current_scene["temperature_range"][0],
                 max_value=st.session_state.current_scene["temperature_range"][1],
-                value=int(np.mean(st.session_state.current_scene["temperature_range"]))
+                value=300,  # 默认值
+                step=10
             )
+            # pH值
             ph = st.slider(
                 "pH值",
                 min_value=st.session_state.current_scene["ph_range"][0],
                 max_value=st.session_state.current_scene["ph_range"][1],
-                value=float(np.mean(st.session_state.current_scene["ph_range"])),
+                value=5.0,
                 step=0.1
             )
 
-            # 仅Au富集场景显示新增参数
+            # Au场景专属参数
             additional_params = {}
             if selected_scene_key == "au_hydrothermal":
+                # 压力（10-1000MPa）
                 pressure = st.slider(
                     "压力 (MPa)",
                     min_value=st.session_state.current_scene["pressure_range"][0],
                     max_value=st.session_state.current_scene["pressure_range"][1],
-                    value=int(np.mean(st.session_state.current_scene["pressure_range"]))
+                    value=200,
+                    step=10
                 )
+                # 氧化还原电位
                 eh = st.slider(
                     "氧化还原电位 (mV)",
                     min_value=st.session_state.current_scene["eh_range"][0],
                     max_value=st.session_state.current_scene["eh_range"][1],
-                    value=int(np.mean(st.session_state.current_scene["eh_range"]))
+                    value=100
                 )
+                # 硫含量
                 sulfur_content = st.slider(
                     "硫含量 (wt%)",
                     min_value=st.session_state.current_scene["sulfur_content_range"][0],
                     max_value=st.session_state.current_scene["sulfur_content_range"][1],
-                    value=float(np.mean(st.session_state.current_scene["sulfur_content_range"])),
+                    value=0.5,
                     step=0.01
                 )
+                # 氯含量
                 chlorine_content = st.slider(
                     "氯含量 (wt%)",
                     min_value=st.session_state.current_scene["chlorine_content_range"][0],
                     max_value=st.session_state.current_scene["chlorine_content_range"][1],
-                    value=float(np.mean(st.session_state.current_scene["chlorine_content_range"])),
+                    value=5.0,
                     step=0.1
                 )
-                # 保存新增参数
                 additional_params = {
                     "pressure": pressure,
                     "eh": eh,
@@ -388,23 +434,24 @@ def main():
                     "chlorine_content": chlorine_content
                 }
 
-            # 时间步长参数
+            # 模拟时间步长（100-20000）
             time_steps = st.slider(
                 "模拟时间步长",
-                min_value=int(st.session_state.current_scene["time_range"][0] // st.session_state.current_scene["dt"]),
-                max_value=int(st.session_state.current_scene["time_range"][1] // st.session_state.current_scene["dt"]),
-                value=int(st.session_state.current_scene["time_range"][1] // st.session_state.current_scene["dt"])
+                min_value=100,
+                max_value=20000,
+                value=5000,
+                step=100
             )
 
-            # 保存所有参数到会话状态（合并基础参数+新增参数）
+            # 保存参数
             st.session_state.params = {
                 "temperature": temperature,
                 "ph": ph,
                 "time_steps": time_steps,
-                **additional_params  # 合并新增参数
+                **additional_params
             }
 
-            # 3. 运行模拟按钮
+            # 3. 运行模拟
             if st.button("▶️ 运行模拟"):
                 with st.spinner("正在执行数值模拟..."):
                     sim = st.session_state.sim
@@ -415,16 +462,15 @@ def main():
                     avg_concentrations = []
                     solver = sim.explicit_solver if scene["solver_type"] == "explicit" else sim.implicit_solver
 
-                    # 执行时间步迭代（带进度条）
+                    # 执行模拟（带进度条）
                     progress_bar = st.progress(0)
                     for step in range(int(params["time_steps"])):
                         solver(scene["diffusion_coeff"], scene["reaction_rate"])
-                        # 每100步记录一次数据
-                        if step % 100 == 0:
+                        if step % 200 == 0:  # 减少记录频率，提升性能
                             time_points.append(sim.time)
                             avg_concentrations.append(np.mean(sim.concentration))
-                        # 更新进度条
                         progress_bar.progress((step + 1) / int(params["time_steps"]))
+                    progress_bar.empty()
 
                     # 生成可视化结果
                     vis = ResultVisualization(sim)
@@ -435,7 +481,7 @@ def main():
                     # 计算核心指标
                     enrichment_factor = vis.calculate_enrichment_factor(scene["initial_concentration"])
 
-                    # 保存结果到会话状态
+                    # 保存结果
                     st.session_state.sim_results = {
                         "contour_fig": contour_fig,
                         "time_fig": time_fig,
@@ -444,35 +490,36 @@ def main():
                         "time_points": time_points,
                         "avg_concentrations": avg_concentrations
                     }
-                    # 保存CSV数据
                     st.session_state.concentration_data = vis.export_csv()
 
                     st.success("模拟完成！结果已展示在主界面")
 
-    # ===== 右侧：结果展示与数据导出 =====
+    # ===== 右侧：结果展示 =====
     st.header("📊 模拟结果展示")
 
     if not st.session_state.current_scene:
         st.info("请先在左侧加载预设场景并运行模拟")
     else:
-        # 显示模拟核心指标
         if st.session_state.sim_results:
-            col1, col2, col3 = st.columns(3)
+            # 核心指标
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("富集系数", f"{st.session_state.sim_results['enrichment_factor']:.2f}")
             with col2:
-                st.metric("总模拟时间", f"{st.session_state.sim_results['simulation_time']:.2f}")
+                st.metric("总模拟时间", f"{st.session_state.sim_results['simulation_time']:.0f}")
             with col3:
+                st.metric("最高浓度", f"{np.max(st.session_state.sim.concentration):.4f} ppm")
+            with col4:
                 st.metric("场景名称", st.session_state.current_scene["name"])
 
             st.divider()
 
-            # 显示可视化图表
+            # 可视化图表（强制使用fig对象，确保显示）
             tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
             with tab1:
-                st.pyplot(st.session_state.sim_results["contour_fig"])
+                st.pyplot(st.session_state.sim_results["contour_fig"], clear_figure=True)
             with tab2:
-                st.pyplot(st.session_state.sim_results["time_fig"])
+                st.pyplot(st.session_state.sim_results["time_fig"], clear_figure=True)
 
             st.divider()
 
@@ -482,13 +529,11 @@ def main():
             with col_csv:
                 st.download_button(
                     label="导出CSV数据",
-                    data=st.session_state.concentration_data,           
-                    file_name=f"{st.session_state.current_scene['name']}.csv",
-                    mime="text/csv" 
+                    data=st.session_state.concentration_data,
+                    file_name=f"{st.session_state.current_scene['name']}_浓度数据.csv",
+                    mime="text/csv"
                 )
-                
             with col_vtk:
-                # 生成VTK数据
                 vis = ResultVisualization(st.session_state.sim)
                 vtk_data = vis.export_vtk()
                 st.download_button(
@@ -520,14 +565,14 @@ def main():
         with col2:
             if st.button("自动批改") and student_id:
                 grade, comment = st.session_state.teaching_manager.auto_grade(task_id, student_id)
-                st.write(f"批改结果：{grade}")
-                st.write(f"评语：{comment}")
+                st.write(f"**批改结果**：{grade}")
+                st.write(f"**评语**：{comment}")
 
         with col3:
             if st.button("导出统计数据"):
                 stats = st.session_state.teaching_manager.export_statistics(task_id)
                 if stats:
-                    st.write("任务统计数据：")
+                    st.write("### 任务统计数据")
                     st.json(stats)
                 else:
                     st.warning("该任务无统计数据")
@@ -535,4 +580,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
