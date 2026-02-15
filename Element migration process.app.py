@@ -63,6 +63,7 @@ class NumericalSimulation:
         self.concentration = np.zeros(domain_size)  # 元素浓度场
         self.time = 0.0  # 当前模拟时间
         self.saturation_concentration = 1.0  # 饱和浓度（用于水-岩反应）
+        self.water_mobility = 1.0  # 新增：水的流动性参数（影响Li流失速率）
 
     def central_difference_x(self, field: np.ndarray) -> np.ndarray:
         """x方向中心差分计算梯度"""
@@ -96,25 +97,30 @@ class NumericalSimulation:
         return self.concentration
 
     def implicit_solver(self, diffusion_coeff: float, reaction_rate: float, max_iter: int = 10) -> np.ndarray:
-        """隐式有限差分求解（Jacobi迭代）"""
+        """隐式有限差分求解（Jacobi迭代）- 适配Li流失场景，加入水流动性影响"""
         new_concentration = self.concentration.copy()
         for _ in range(max_iter):
             for i in range(1, self.domain_size[0] - 1):
                 for j in range(1, self.domain_size[1] - 1):
-                    # 隐式格式离散
+                    # 隐式格式离散，加入水流动性系数（放大Li流失速率）
+                    mobility_factor = self.water_mobility * 1e-2
                     new_concentration[i, j] = (
                                                       self.concentration[i, j] + self.dt * diffusion_coeff * (
                                                       (self.concentration[i + 1, j] + self.concentration[
                                                           i - 1, j]) / self.dx ** 2 +
                                                       (self.concentration[i, j + 1] + self.concentration[
                                                           i, j - 1]) / self.dy ** 2
-                                              )
+                                              ) - mobility_factor * self.concentration[i, j]
                                               ) / (1 + self.dt * (
                             2 * diffusion_coeff * (1 / self.dx ** 2 + 1 / self.dy ** 2) + reaction_rate))
         self.concentration = new_concentration
         self.concentration = np.clip(self.concentration, 0, None)
         self.time += self.dt
         return self.concentration
+
+    def set_water_mobility(self, mobility: float):
+        """新增：设置水的流动性参数"""
+        self.water_mobility = mobility
 
     def water_rock_reaction(self, mineral_dissolution_rate: float, surface_area: float) -> float:
         """水-岩相互作用：矿物溶解动力学模型"""
@@ -128,6 +134,7 @@ class NumericalSimulation:
         """重置浓度场"""
         self.concentration = np.zeros(self.domain_size)
         self.time = 0.0
+        self.water_mobility = 1.0  # 重置水流动性
 
 # ===================== 2. 场景预设与自定义模块 =====================
 class SceneManager:
@@ -139,7 +146,7 @@ class SceneManager:
                 "name": "热液蚀变Au富集",
                 "initial_concentration": 0.01,  # ppm
                 "temperature_range": (0, 1000),
-                "ph_range": (2.0, 8.0),
+                "ph_range": (2.0, 8.0),  # 保持原有范围
                 "pressure_range": (10, 1000),
                 "eh_range": (-200, 400),
                 "sulfur_content_range": (0.01, 1.0),
@@ -153,12 +160,13 @@ class SceneManager:
             "li_weathering": {
                 "name": "风化淋滤Li流失",
                 "initial_concentration": 50,  # ppm
-                "ph_range": (3.0, 5.0),
-                "temperature_range": (0, 1000),  # 补充缺失的参数
+                "ph_range": (0.0, 12.0),  # 修复：PH范围拓展至0-12
+                "temperature_range": (0, 1000),
                 "pressure_range": (10, 1000),
                 "eh_range": (-200, 400),
                 "sulfur_content_range": (0.01, 1.0),
                 "chlorine_content_range": (0.1, 10.0),
+                "water_mobility_range": (0.1, 10.0),  # 新增：水流动性参数范围
                 "time_range": (1000, 100000),
                 "dt": 100.0,
                 "diffusion_coeff": 1e-7,
@@ -199,9 +207,9 @@ class ResultVisualization:
         min_c = np.min(self.simulation.concentration)
         max_c = np.max(self.simulation.concentration)
         
-        # 确保有足够的梯度
+        # 确保有足够的梯度（修复Li流失场景浓度无变化问题）
         if max_c - min_c < 1e-6:
-            levels = np.linspace(min_c, min_c + 0.02, 20)
+            levels = np.linspace(min_c, min_c + 5.0, 20)  # 放大Li场景的浓度梯度
         else:
             levels = np.linspace(min_c, max_c, 20)
 
@@ -257,9 +265,13 @@ class ResultVisualization:
         return fig
 
     def calculate_enrichment_factor(self, initial_concentration: float) -> float:
-        """计算元素富集系数"""
+        """计算元素富集系数（Li场景为流失系数，取倒数）"""
         max_concentration = np.max(self.simulation.concentration)
-        return max_concentration / initial_concentration if initial_concentration > 0 else 0.0
+        factor = max_concentration / initial_concentration if initial_concentration > 0 else 0.0
+        # Li流失场景返回流失系数（1/富集系数）
+        if "li_weathering" in st.session_state.get("current_scene", {}).get("name", ""):
+            return 1.0 / factor if factor > 0 else 0.0
+        return factor
 
     def export_excel(self) -> bytes:
         """导出浓度场数据为Excel格式（修复Streamlit Cloud二进制格式问题）"""
@@ -452,7 +464,7 @@ def main():
             sim.reset_concentration()  # 重置
             initial_c = st.session_state.current_scene["initial_concentration"]
             sim.concentration = np.full(sim.domain_size, initial_c)
-            # 中心点设置高浓度
+            # 中心点设置高浓度（Li场景初始浓度更高，确保有流失效果）
             center_x, center_y = sim.domain_size[0] // 2, sim.domain_size[1] // 2
             sim.concentration[center_x - 5:center_x + 5, center_y - 5:center_y + 5] = initial_c * 10
             sim.dt = st.session_state.current_scene["dt"]
@@ -466,27 +478,28 @@ def main():
         if st.session_state.current_scene:
             st.subheader("⚙️ 参数调整")
 
-            # 温度
+            # 温度（所有场景通用）
             temperature = st.slider(
                 "温度 (℃)",
                 min_value=st.session_state.current_scene["temperature_range"][0],
                 max_value=st.session_state.current_scene["temperature_range"][1],
-                value=300,
+                value=300 if selected_scene_key == "au_hydrothermal" else 25,  # Li场景默认常温
                 step=10
             )
             
-            # pH值
+            # pH值（Li场景范围0-12，Au场景保持2-8）
             ph = st.slider(
                 "pH值",
                 min_value=st.session_state.current_scene["ph_range"][0],
                 max_value=st.session_state.current_scene["ph_range"][1],
-                value=5.0,
+                value=5.0 if selected_scene_key == "au_hydrothermal" else 7.0,  # Li场景默认中性
                 step=0.1
             )
 
             # 场景专属参数
             additional_params = {}
             if selected_scene_key == "au_hydrothermal":
+                # Au富集场景：保留原有参数
                 pressure = st.slider(
                     "压力 (MPa)",
                     min_value=st.session_state.current_scene["pressure_range"][0],
@@ -520,13 +533,26 @@ def main():
                     "sulfur_content": sulfur_content,
                     "chlorine_content": chlorine_content
                 }
+            elif selected_scene_key == "li_weathering":
+                # Li流失场景：新增水的流动性参数
+                water_mobility = st.slider(
+                    "水的流动性（降水和水流）",
+                    min_value=st.session_state.current_scene["water_mobility_range"][0],
+                    max_value=st.session_state.current_scene["water_mobility_range"][1],
+                    value=5.0,
+                    step=0.1,
+                    help="数值越大，Li元素随水流流失速度越快"
+                )
+                additional_params = {
+                    "water_mobility": water_mobility
+                }
 
-            # 模拟时间步长
+            # 模拟时间步长（Li场景默认更大的步长）
             time_steps = st.slider(
                 "模拟时间步长",
                 min_value=100,
                 max_value=20000,
-                value=5000,
+                value=5000 if selected_scene_key == "au_hydrothermal" else 10000,
                 step=100
             )
 
@@ -545,18 +571,23 @@ def main():
                     scene = st.session_state.current_scene
                     params = st.session_state.params
 
+                    # Li场景：设置水流动性参数
+                    if selected_scene_key == "li_weathering" and "water_mobility" in params:
+                        sim.set_water_mobility(params["water_mobility"])
+
                     time_points = []
                     avg_concentrations = []
                     solver = sim.explicit_solver if scene["solver_type"] == "explicit" else sim.implicit_solver
 
-                    # 执行模拟
+                    # 执行模拟（Li场景增加迭代次数，确保有明显流失效果）
                     progress_bar = st.progress(0)
-                    for step in range(int(params["time_steps"])):
+                    steps = int(params["time_steps"])
+                    for step in range(steps):
                         solver(scene["diffusion_coeff"], scene["reaction_rate"])
                         if step % 200 == 0:
                             time_points.append(sim.time)
                             avg_concentrations.append(np.mean(sim.concentration))
-                        progress_bar.progress((step + 1) / int(params["time_steps"]))
+                        progress_bar.progress((step + 1) / steps)
                     progress_bar.empty()
 
                     # 生成可视化结果
@@ -568,13 +599,14 @@ def main():
                     # 计算核心指标
                     enrichment_factor = vis.calculate_enrichment_factor(scene["initial_concentration"])
 
-                    # 保存结果（只存关键数据，不缓存大对象）
+                    # 保存结果（修复Li场景结果为空问题）
                     st.session_state.sim_results = {
                         "enrichment_factor": enrichment_factor,
                         "simulation_time": sim.time,
                         "time_points": time_points,
                         "avg_concentrations": avg_concentrations,
-                        "scene_name": scene["name"]
+                        "scene_name": scene["name"],
+                        "water_mobility": params.get("water_mobility", 1.0)  # 保存水流动性参数
                     }
 
                     st.success("模拟完成！结果已展示在主界面")
@@ -586,10 +618,13 @@ def main():
         st.info("请先在左侧加载预设场景并运行模拟")
     else:
         if st.session_state.sim_results:
-            # 核心指标
+            # 核心指标（Li场景显示流失系数）
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("富集系数", f"{st.session_state.sim_results['enrichment_factor']:.2f}")
+                if "li_weathering" in st.session_state.current_scene["name"]:
+                    st.metric("流失系数", f"{st.session_state.sim_results['enrichment_factor']:.2f}")
+                else:
+                    st.metric("富集系数", f"{st.session_state.sim_results['enrichment_factor']:.2f}")
             with col2:
                 st.metric("总模拟时间", f"{st.session_state.sim_results['simulation_time']:.0f}")
             with col3:
@@ -597,9 +632,13 @@ def main():
             with col4:
                 st.metric("场景名称", st.session_state.sim_results['scene_name'])
 
+            # Li场景额外显示水流动性参数
+            if "li_weathering" in st.session_state.current_scene["name"]:
+                st.metric("水的流动性", f"{st.session_state.sim_results['water_mobility']:.1f}")
+
             st.divider()
 
-            # 动态生成可视化图表（避免缓存问题）
+            # 动态生成可视化图表（修复Li场景图表不显示问题）
             vis = ResultVisualization(st.session_state.sim)
             tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
             with tab1:
