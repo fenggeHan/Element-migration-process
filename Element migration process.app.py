@@ -552,7 +552,7 @@ def main():
                 "time_steps": time_steps,** additional_params
             }
 
-            # 4. 运行模拟（容错）
+            # 4. 运行模拟（容错 + 确保Li场景结果完整赋值）
             if st.button("▶️ 运行模拟"):
                 try:
                     with st.spinner("正在执行数值模拟..."):
@@ -572,66 +572,83 @@ def main():
                         diffusion_coeff = scene.get("diffusion_coeff", 1e-6)
                         reaction_rate = scene.get("reaction_rate", 1e-4)
 
-                        # 执行模拟
+                        # 执行模拟（Li场景适配步长，避免无数据）
                         progress_bar = st.progress(0)
                         steps = int(params.get("time_steps", 5000))
+                        # 确保至少记录10个数据点，避免时间曲线无数据
+                        record_interval = max(1, steps // 100) if steps > 100 else 1
                         for step in range(steps):
                             solver(diffusion_coeff, reaction_rate)
-                            if step % 200 == 0:
+                            if step % record_interval == 0:
                                 time_points.append(sim.time)
                                 avg_concentrations.append(np.mean(sim.concentration))
                             progress_bar.progress((step + 1) / steps)
                         progress_bar.empty()
 
-                        # 生成结果
+                        # 生成结果（强制确保Li场景结果字段完整）
                         vis = ResultVisualization(sim)
                         initial_c = scene.get("initial_concentration", 0.01)
                         enrichment_factor = vis.calculate_enrichment_factor(initial_c)
 
-                        # 保存结果
+                        # 保存结果（补充所有必要字段，避免展示时缺失）
                         st.session_state.sim_results = {
                             "enrichment_factor": enrichment_factor,
                             "simulation_time": sim.time,
-                            "time_points": time_points,
-                            "avg_concentrations": avg_concentrations,
-                            "scene_name": scene.get("name", "未知场景"),
-                            "water_mobility": params.get("water_mobility", 1.0)
+                            "time_points": time_points if time_points else [0.0],  # 兜底空列表
+                            "avg_concentrations": avg_concentrations if avg_concentrations else [initial_c],  # 兜底初始浓度
+                            "scene_name": scene.get("name", "风化淋滤Li流失"),  # Li场景强制赋值名称
+                            "water_mobility": params.get("water_mobility", 1.0),
+                            "max_concentration": np.max(sim.concentration),
+                            "min_concentration": np.min(sim.concentration)
                         }
 
                         st.success("模拟完成！结果已展示在主界面")
                 except Exception as e:
                     st.error(f"模拟出错：{str(e)}")
+                    # 模拟失败时也赋值基础结果，避免展示板块完全空白
+                    st.session_state.sim_results = {
+                        "enrichment_factor": 0.0,
+                        "simulation_time": 0.0,
+                        "time_points": [0.0],
+                        "avg_concentrations": [0.0],
+                        "scene_name": scene.get("name", "风化淋滤Li流失"),
+                        "water_mobility": params.get("water_mobility", 1.0),
+                        "max_concentration": 0.0,
+                        "min_concentration": 0.0
+                    }
 
-    # 右侧：结果展示（全容错）
+    # 右侧：结果展示板块（核心优化，确保Li场景正常显示）
     st.header("📊 模拟结果展示")
 
+    # 优化判空逻辑：只要加载了场景就显示基础框架，模拟后显示完整结果
     if not st.session_state.current_scene:
         st.info("请先在左侧加载预设场景并运行模拟")
     else:
         sim_results = st.session_state.sim_results
-        if sim_results:
-            # 核心指标
+        # 即使无模拟结果，也显示基础信息，避免空白
+        if not sim_results:
+            st.info(f"已加载【{st.session_state.current_scene.get('name', '未知场景')}】场景，请点击左侧「运行模拟」按钮生成结果")
+        else:
+            # 核心指标（适配Li场景的流失系数展示）
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                if "li_weathering" in current_scene.get("name", ""):
-                    st.metric("流失系数", f"{sim_results.get('enrichment_factor', 0):.2f}")
-                else:
-                    st.metric("富集系数", f"{sim_results.get('enrichment_factor', 0):.2f}")
+                metric_label = "流失系数" if "li_weathering" in st.session_state.selected_scene_key else "富集系数"
+                st.metric(metric_label, f"{sim_results.get('enrichment_factor', 0):.2f}")
             with col2:
                 st.metric("总模拟时间", f"{sim_results.get('simulation_time', 0):.0f}")
             with col3:
-                max_c = np.max(st.session_state.sim.concentration) if hasattr(st.session_state.sim, 'concentration') else 0
+                max_c = sim_results.get("max_concentration", 0.0)
                 st.metric("最高浓度", f"{max_c:.4f} ppm")
             with col4:
-                st.metric("场景名称", sim_results.get('scene_name', '未知'))
+                st.metric("场景名称", sim_results.get('scene_name', '风化淋滤Li流失'))
 
-            # Li场景额外显示水流动性
-            if "li_weathering" in current_scene.get("name", ""):
+            # Li场景额外显示水流动性（强制显示，避免缺失）
+            if "li_weathering" in st.session_state.selected_scene_key:
                 st.metric("水的流动性", f"{sim_results.get('water_mobility', 1.0):.1f}")
 
             st.divider()
 
-            # 图表展示（容错）
+            # 图表展示（容错 + 兜底数据，避免Li场景图表报错）
             try:
                 vis = ResultVisualization(st.session_state.sim)
                 tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
@@ -639,17 +656,21 @@ def main():
                     contour_fig = vis.plot_contour()
                     st.pyplot(contour_fig)
                 with tab2:
-                    time_fig = vis.plot_time_series(
-                        sim_results.get('time_points', []),
-                        sim_results.get('avg_concentrations', [])
-                    )
+                    # 兜底数据：避免空列表导致图表报错
+                    time_points = sim_results.get('time_points', [0.0])
+                    avg_concs = sim_results.get('avg_concentrations', [0.0])
+                    time_fig = vis.plot_time_series(time_points, avg_concs)
                     st.pyplot(time_fig)
             except Exception as e:
                 st.error(f"图表生成出错：{str(e)}")
+                # 图表生成失败时显示基础提示
+                st.info("图表加载失败，核心模拟数据如下：")
+                st.write(f"- 平均浓度：{np.mean(sim_results.get('avg_concentrations', [0.0])):.4f} ppm")
+                st.write(f"- 模拟总时长：{sim_results.get('simulation_time', 0):.0f}")
 
             st.divider()
 
-            # 数据导出（修复格式错误）
+            # 数据导出（修复格式错误 + 适配Li场景）
             st.subheader("💾 数据导出")
             col_excel, col_vtk = st.columns(2)
             
@@ -658,10 +679,11 @@ def main():
                     vis = ResultVisualization(st.session_state.sim)
                     excel_data = vis.export_excel()  # 返回bytes
                     if excel_data:
+                        scene_name = sim_results.get('scene_name', 'Li流失模拟')
                         st.download_button(
                             label="导出Excel数据",
                             data=excel_data,  # 直接传bytes
-                            file_name=f"{sim_results.get('scene_name', '数据')}_浓度数据.xlsx",
+                            file_name=f"{scene_name}_浓度数据.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="excel_btn"
                         )
@@ -675,10 +697,11 @@ def main():
                     vis = ResultVisualization(st.session_state.sim)
                     vtk_data = vis.export_vtk()  # 返回str
                     if vtk_data:
+                        scene_name = sim_results.get('scene_name', 'Li流失模拟')
                         st.download_button(
                             label="导出VTK数据",
                             data=vtk_data,  # 直接传字符串
-                            file_name=f"{sim_results.get('scene_name', '数据')}_浓度数据.vtk",
+                            file_name=f"{scene_name}_浓度数据.vtk",
                             mime="text/plain",
                             key="vtk_btn"
                         )
