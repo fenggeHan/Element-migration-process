@@ -301,14 +301,13 @@ class ResultVisualization:
             st.error(f"Excel导出失败：{str(e)}")
             return b""
 
-    def export_vtk(self) -> StringIO:
-        """导出浓度场数据为VTK格式（保留原功能）"""
-        output = StringIO()
+    def export_vtk(self) -> str:
+        """导出浓度场数据为VTK格式（修复StringIO兼容问题，返回原始字符串）"""
         nx, ny = self.simulation.domain_size
         n_points = nx * ny
         
         # 标准VTK结构化点格式
-        vtk_header = f"""# vtk DataFile Version 3.0
+        vtk_content = f"""# vtk DataFile Version 3.0
 Geochemical Element Migration Simulation
 ASCII
 DATASET STRUCTURED_POINTS
@@ -319,15 +318,12 @@ POINT_DATA {n_points}
 SCALARS concentration float 1
 LOOKUP_TABLE default
 """
-        output.write(vtk_header)
-        
         # 按VTK要求的顺序写入数据（先Y后X）
         for j in range(ny):
             for i in range(nx):
-                output.write(f"{self.simulation.concentration[i, j]:.6f}\n")
+                vtk_content += f"{self.simulation.concentration[i, j]:.6f}\n"
         
-        output.seek(0)
-        return output
+        return vtk_content
 
 # ===================== 4. 教学管理模块（保留类定义，仅删除UI调用） =====================
 class TeachingManagement:
@@ -619,7 +615,7 @@ def main():
 
             st.divider()
 
-            # 数据导出（修复后的Excel导出）
+            # 数据导出（修复后的Excel和VTK导出）
             st.subheader("💾 数据导出")
             col_excel, col_vtk = st.columns(2)
             
@@ -638,15 +634,18 @@ def main():
                     st.warning("Excel数据生成失败，请重试")
             
             with col_vtk:
-                # VTK导出保持不变
-                vtk_data = vis.export_vtk()
-                st.download_button(
-                    label="导出VTK数据",
-                    data=vtk_data,
-                    file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.vtk",
-                    mime="text/plain",
-                    key="vtk_download_btn"
-                )
+                # 实时生成VTK字符串数据
+                vtk_content = vis.export_vtk()
+                if vtk_content:
+                    st.download_button(
+                        label="导出VTK数据",
+                        data=vtk_content,  # 直接传字符串
+                        file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.vtk",
+                        mime="text/plain",
+                        key="vtk_download_btn"  # 增加唯一key避免冲突
+                    )
+                else:
+                    st.warning("VTK数据生成失败，请重试")
 
     # ===== 已删除：教学管理功能（教师端）模块 =====
 
