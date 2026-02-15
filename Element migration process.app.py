@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import matplotlib
 import os
+import platform
 
 # ===================== 全局配置 =====================
 # 深度优化跨平台字体配置（解决中文显示问题）
@@ -24,7 +25,6 @@ def setup_chinese_font():
     }
     
     # 检测系统类型
-    import platform
     system = platform.system()
     candidate_fonts = font_paths.get(system, ['DejaVu Sans'])
     
@@ -261,16 +261,23 @@ class ResultVisualization:
         max_concentration = np.max(self.simulation.concentration)
         return max_concentration / initial_concentration if initial_concentration > 0 else 0.0
 
-    def export_excel(self) -> BytesIO:
-        """导出浓度场数据为Excel格式（替换原CSV导出）"""
-        # 创建DataFrame存储数据
-        x_coords, y_coords, concs = [], [], []
+    def export_excel(self) -> bytes:
+        """导出浓度场数据为Excel格式（修复Streamlit Cloud二进制格式问题）"""
+        # 强制检查依赖
+        try:
+            import openpyxl
+        except ImportError:
+            st.error("缺少Excel导出依赖，请安装：pip install openpyxl")
+            return b""  # 返回空字节避免崩溃
         
-        for i in range(self.simulation.domain_size[0]):
-            for j in range(self.simulation.domain_size[1]):
+        # 创建数据
+        x_coords, y_coords, concs = [], [], []
+        nx, ny = self.simulation.domain_size
+        for i in range(nx):
+            for j in range(ny):
                 x_coords.append(i)
                 y_coords.append(j)
-                concs.append(self.simulation.concentration[i, j])
+                concs.append(float(self.simulation.concentration[i, j]))  # 确保是float类型
         
         df = pd.DataFrame({
             'X坐标': x_coords,
@@ -278,14 +285,21 @@ class ResultVisualization:
             '浓度(ppm)': concs
         })
         
-        # 将数据写入BytesIO缓冲区
+        # 核心修复：先写入BytesIO，再读取为原始bytes返回
         output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='浓度数据', index=False)
+        try:
+            with pd.ExcelWriter(output, engine='openpyxl', mode='w') as writer:
+                df.to_excel(writer, sheet_name='浓度数据', index=False)
+            
+            # 关键步骤：将BytesIO转为原始bytes（避免Streamlit解析问题）
+            output.seek(0)
+            excel_bytes = output.getvalue()  # 读取为bytes类型
+            output.close()  # 显式关闭缓冲区
+            return excel_bytes
         
-        # 重置缓冲区指针到起始位置
-        output.seek(0)
-        return output
+        except Exception as e:
+            st.error(f"Excel导出失败：{str(e)}")
+            return b""
 
     def export_vtk(self) -> StringIO:
         """导出浓度场数据为VTK格式（保留原功能）"""
@@ -605,28 +619,33 @@ def main():
 
             st.divider()
 
-            # 数据导出（替换为Excel格式）
+            # 数据导出（修复后的Excel导出）
             st.subheader("💾 数据导出")
             col_excel, col_vtk = st.columns(2)
             
             with col_excel:
-                # 实时生成Excel数据
-                excel_data = vis.export_excel()
-                st.download_button(
-                    label="导出Excel数据",
-                    data=excel_data,
-                    file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                # 实时生成Excel字节数据
+                excel_bytes = vis.export_excel()
+                if excel_bytes:  # 仅当数据有效时显示按钮
+                    st.download_button(
+                        label="导出Excel数据",
+                        data=excel_bytes,  # 直接传bytes，不是BytesIO
+                        file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="excel_download_btn"  # 增加唯一key避免冲突
+                    )
+                else:
+                    st.warning("Excel数据生成失败，请重试")
             
             with col_vtk:
-                # 实时生成VTK数据
+                # VTK导出保持不变
                 vtk_data = vis.export_vtk()
                 st.download_button(
                     label="导出VTK数据",
                     data=vtk_data,
                     file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.vtk",
-                    mime="text/plain"
+                    mime="text/plain",
+                    key="vtk_download_btn"
                 )
 
     # ===== 已删除：教学管理功能（教师端）模块 =====
