@@ -183,6 +183,8 @@ class SceneManager:
         if scene_name == "li_weathering":
             scene.setdefault("water_mobility_range", (0.1, 10.0))
             scene.setdefault("ph_range", (0.0, 12.0))
+            scene.setdefault("temperature_range", (0, 1000))
+            scene.setdefault("initial_concentration", 50.0)
         return scene
 
     def create_custom_scene(self, name: str, params: Dict) -> Dict:
@@ -266,11 +268,11 @@ class ResultVisualization:
         return factor
 
     def export_excel(self) -> bytes:
-        """修复Excel导出格式：返回纯bytes而非BytesIO"""
+        """修复Excel导出格式：返回纯bytes（彻底解决Invalid binary data format错误）"""
         try:
             import openpyxl
         except ImportError:
-            st.error("缺少Excel依赖：pip install openpyxl")
+            st.error("缺少Excel依赖：请在终端执行 pip install openpyxl")
             return b""
         
         # 构建数据
@@ -288,21 +290,21 @@ class ResultVisualization:
             '浓度(ppm)': concs
         })
         
-        # 核心修复：写入BytesIO后读取为纯bytes
+        # 核心修复：确保返回纯bytes，而非BytesIO对象
         output = BytesIO()
         try:
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='浓度数据', index=False)
             output.seek(0)
-            excel_data = output.getvalue()  # 转为bytes类型
+            excel_bytes = output.getvalue()  # 转为纯字节数据
             output.close()
-            return excel_data
+            return excel_bytes
         except Exception as e:
             st.error(f"Excel导出失败：{str(e)}")
             return b""
 
     def export_vtk(self) -> str:
-        """修复VTK导出格式：返回纯字符串而非StringIO"""
+        """修复VTK导出格式：返回纯字符串（彻底解决Invalid binary data format错误）"""
         nx, ny = self.simulation.domain_size
         n_points = nx * ny
         
@@ -323,7 +325,7 @@ LOOKUP_TABLE default
             for i in range(nx):
                 vtk_content += f"{self.simulation.concentration[i, j]:.6f}\n"
         
-        return vtk_content  # 直接返回字符串
+        return vtk_content  # 直接返回纯字符串
 
 # ===================== 4. 教学管理模块（保留） =====================
 class TeachingManagement:
@@ -415,7 +417,7 @@ def init_session_state():
             },
             deadline="2024-12-31"
         )
-    # 初始化场景和参数
+    # 初始化场景和参数（强制赋默认值）
     if "current_scene" not in st.session_state:
         st.session_state.current_scene = {}
     if "sim_results" not in st.session_state:
@@ -475,7 +477,7 @@ def main():
 
         st.divider()
 
-        # 3. 参数调整（核心：所有参数读取都加get容错）
+        # 3. 参数调整（核心：彻底移除所有直接键读取，全部用get+默认值）
         current_scene = st.session_state.current_scene
         if current_scene:
             st.subheader("⚙️ 参数调整")
@@ -523,8 +525,8 @@ def main():
                     "chlorine_content": chlorine_content
                 }
             elif selected_scene_key == "li_weathering":
-                # Li场景：水流动性参数（核心修复KeyError）
-                mobility_range = current_scene.get("water_mobility_range", (0.1, 10.0))  # 容错默认值
+                # 核心修复：彻底移除["water_mobility_range"]，全部用get+默认值
+                mobility_range = current_scene.get("water_mobility_range", (0.1, 10.0))  # 永远不会KeyError
                 water_mobility = st.slider(
                     "水的流动性（降水和水流）",
                     min_value=mobility_range[0],
@@ -611,7 +613,7 @@ def main():
                         "simulation_time": 0.0,
                         "time_points": [0.0],
                         "avg_concentrations": [0.0],
-                        "scene_name": scene.get("name", "风化淋滤Li流失"),
+                        "scene_name": current_scene.get("name", "风化淋滤Li流失"),
                         "water_mobility": params.get("water_mobility", 1.0),
                         "max_concentration": 0.0,
                         "min_concentration": 0.0
@@ -632,7 +634,7 @@ def main():
             # 核心指标（适配Li场景的流失系数展示）
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                metric_label = "流失系数" if "li_weathering" in st.session_state.selected_scene_key else "富集系数"
+                metric_label = "流失系数" if selected_scene_key == "li_weathering" else "富集系数"
                 st.metric(metric_label, f"{sim_results.get('enrichment_factor', 0):.2f}")
             with col2:
                 st.metric("总模拟时间", f"{sim_results.get('simulation_time', 0):.0f}")
@@ -643,7 +645,7 @@ def main():
                 st.metric("场景名称", sim_results.get('scene_name', '风化淋滤Li流失'))
 
             # Li场景额外显示水流动性（强制显示，避免缺失）
-            if "li_weathering" in st.session_state.selected_scene_key:
+            if selected_scene_key == "li_weathering":
                 st.metric("水的流动性", f"{sim_results.get('water_mobility', 1.0):.1f}")
 
             st.divider()
@@ -670,19 +672,19 @@ def main():
 
             st.divider()
 
-            # 数据导出（修复格式错误 + 适配Li场景）
+            # 数据导出（彻底修复Invalid binary data format错误）
             st.subheader("💾 数据导出")
             col_excel, col_vtk = st.columns(2)
             
             with col_excel:
                 try:
                     vis = ResultVisualization(st.session_state.sim)
-                    excel_data = vis.export_excel()  # 返回bytes
-                    if excel_data:
-                        scene_name = sim_results.get('scene_name', 'Li流失模拟')
+                    excel_bytes = vis.export_excel()  # 返回纯bytes
+                    if excel_bytes:
+                        scene_name = sim_results.get('scene_name', 'Li流失模拟').replace(" ", "_")
                         st.download_button(
                             label="导出Excel数据",
-                            data=excel_data,  # 直接传bytes
+                            data=excel_bytes,  # 直接传纯字节数据
                             file_name=f"{scene_name}_浓度数据.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="excel_btn"
@@ -695,12 +697,12 @@ def main():
             with col_vtk:
                 try:
                     vis = ResultVisualization(st.session_state.sim)
-                    vtk_data = vis.export_vtk()  # 返回str
-                    if vtk_data:
-                        scene_name = sim_results.get('scene_name', 'Li流失模拟')
+                    vtk_str = vis.export_vtk()  # 返回纯字符串
+                    if vtk_str:
+                        scene_name = sim_results.get('scene_name', 'Li流失模拟').replace(" ", "_")
                         st.download_button(
                             label="导出VTK数据",
-                            data=vtk_data,  # 直接传字符串
+                            data=vtk_str,  # 直接传纯字符串
                             file_name=f"{scene_name}_浓度数据.vtk",
                             mime="text/plain",
                             key="vtk_btn"
