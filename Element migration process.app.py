@@ -186,13 +186,14 @@ class ResultVisualization:
         setup_chinese_font()
 
     def plot_contour(self, title: str = "浓度等值线图") -> plt.Figure:
-        """重构等值线图绘制逻辑，确保显示正常"""
+        """重构等值线图绘制逻辑，仅图内文字改为英文"""
         # 强制重新配置字体
         setup_chinese_font()
         
         # 创建全新的figure对象，避免缓存冲突
         fig, ax = plt.subplots(figsize=(10, 8), dpi=150, facecolor="white")
-        fig.suptitle(title, fontsize=14, fontweight='bold')
+        # 图标题改为英文
+        fig.suptitle("Concentration Contour Map", fontsize=14, fontweight='bold')
 
         # 生成浓度等值线
         min_c = np.min(self.simulation.concentration)
@@ -222,11 +223,11 @@ class ResultVisualization:
             alpha=0.5
         )
 
-        # 添加颜色条
+        # 添加颜色条（英文标签）
         cbar = fig.colorbar(contour, ax=ax, label='Concentration (ppm)', shrink=0.8)
         cbar.ax.set_ylabel('Concentration (ppm)', fontsize=10)
 
-        # 设置坐标轴
+        # 设置坐标轴（英文标签）
         ax.set_xlabel('Spatial Coordinate X', fontsize=12)
         ax.set_ylabel('Spatial Coordinate Y', fontsize=12)
         ax.tick_params(axis='both', labelsize=10)
@@ -237,17 +238,18 @@ class ResultVisualization:
         return fig
 
     def plot_time_series(self, time_points: List[float], concentrations: List[float],
-                         title: str = "Concentration-Time Curve") -> plt.Figure:
-        """绘制浓度随时间变化曲线"""
+                         title: str = "浓度-时间曲线") -> plt.Figure:
+        """绘制浓度随时间变化曲线，仅图内文字改为英文"""
         # 强制重新配置字体
         setup_chinese_font()
         
         fig, ax = plt.subplots(figsize=(10, 4), dpi=150, facecolor="white")
         
         ax.plot(time_points, concentrations, 'b-', linewidth=2, alpha=0.8)
+        # 坐标轴和标题改为英文
         ax.set_xlabel('Time', fontsize=12)
         ax.set_ylabel('Average Concentration (ppm)', fontsize=12)
-        ax.set_title(title, fontsize=14, pad=10)
+        ax.set_title("Concentration-Time Curve", fontsize=14, pad=10)
         ax.grid(True, alpha=0.3, linestyle='--')
         ax.tick_params(axis='both', labelsize=10)
         
@@ -259,11 +261,9 @@ class ResultVisualization:
         max_concentration = np.max(self.simulation.concentration)
         return max_concentration / initial_concentration if initial_concentration > 0 else 0.0
 
-    def export_csv(self) -> StringIO:
-        """导出浓度场数据为CSV（修复数据流处理）"""
-        output = StringIO()
-        # 使用pandas更稳定地生成CSV
-        df = pd.DataFrame()
+    def export_excel(self) -> BytesIO:
+        """导出浓度场数据为Excel格式（替换原CSV导出）"""
+        # 创建DataFrame存储数据
         x_coords, y_coords, concs = [], [], []
         
         for i in range(self.simulation.domain_size[0]):
@@ -272,17 +272,23 @@ class ResultVisualization:
                 y_coords.append(j)
                 concs.append(self.simulation.concentration[i, j])
         
-        df['X_Coordinate'] = x_coords
-        df['Y_Coordinate'] = y_coords
-        df['Concentration_(ppm)'] = concs
+        df = pd.DataFrame({
+            'X坐标': x_coords,
+            'Y坐标': y_coords,
+            '浓度(ppm)': concs
+        })
         
-        # 写入CSV
-        df.to_csv(output, index=False, encoding='utf-8-sig')
+        # 将数据写入BytesIO缓冲区
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='浓度数据', index=False)
+        
+        # 重置缓冲区指针到起始位置
         output.seek(0)
         return output
 
     def export_vtk(self) -> StringIO:
-        """导出浓度场数据为VTK格式（修复格式错误）"""
+        """导出浓度场数据为VTK格式（保留原功能）"""
         output = StringIO()
         nx, ny = self.simulation.domain_size
         n_points = nx * ny
@@ -588,7 +594,7 @@ def main():
             tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
             with tab1:
                 contour_fig = vis.plot_contour(title=f"{st.session_state.sim_results['scene_name']} - 浓度等值线图")
-                st.pyplot(contour_fig)  # 移除clear_figure=True
+                st.pyplot(contour_fig)
             with tab2:
                 time_fig = vis.plot_time_series(
                     st.session_state.sim_results['time_points'],
@@ -599,18 +605,18 @@ def main():
 
             st.divider()
 
-            # 数据导出（实时生成，不依赖缓存）
+            # 数据导出（替换为Excel格式）
             st.subheader("💾 数据导出")
-            col_csv, col_vtk = st.columns(2)
+            col_excel, col_vtk = st.columns(2)
             
-            with col_csv:
-                # 实时生成CSV数据
-                csv_data = vis.export_csv()
+            with col_excel:
+                # 实时生成Excel数据
+                excel_data = vis.export_excel()
                 st.download_button(
-                    label="导出CSV数据",
-                    data=csv_data,
-                    file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.csv",
-                    mime="text/csv; charset=utf-8"
+                    label="导出Excel数据",
+                    data=excel_data,
+                    file_name=f"{st.session_state.sim_results['scene_name']}_浓度数据.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
             
             with col_vtk:
@@ -659,4 +665,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
