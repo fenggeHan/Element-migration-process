@@ -223,12 +223,12 @@ class ResultVisualization:
         )
 
         # 添加颜色条
-        cbar = fig.colorbar(contour, ax=ax, label='浓度 (ppm)', shrink=0.8)
-        cbar.ax.set_ylabel('浓度 (ppm)', fontsize=10)
+        cbar = fig.colorbar(contour, ax=ax, label='Concentration (ppm)', shrink=0.8)
+        cbar.ax.set_ylabel('Concentration (ppm)', fontsize=10)
 
         # 设置坐标轴
-        ax.set_xlabel('空间坐标X', fontsize=12)
-        ax.set_ylabel('空间坐标Y', fontsize=12)
+        ax.set_xlabel('Spatial Coordinate X', fontsize=12)
+        ax.set_ylabel('Spatial Coordinate Y', fontsize=12)
         ax.tick_params(axis='both', labelsize=10)
         
         # 确保布局紧凑
@@ -237,7 +237,7 @@ class ResultVisualization:
         return fig
 
     def plot_time_series(self, time_points: List[float], concentrations: List[float],
-                         title: str = "浓度-时间曲线") -> plt.Figure:
+                         title: str = "Concentration-Time Curve") -> plt.Figure:
         """绘制浓度随时间变化曲线"""
         # 强制重新配置字体
         setup_chinese_font()
@@ -245,8 +245,8 @@ class ResultVisualization:
         fig, ax = plt.subplots(figsize=(10, 4), dpi=150, facecolor="white")
         
         ax.plot(time_points, concentrations, 'b-', linewidth=2, alpha=0.8)
-        ax.set_xlabel('时间', fontsize=12)
-        ax.set_ylabel('平均浓度 (ppm)', fontsize=12)
+        ax.set_xlabel('Time', fontsize=12)
+        ax.set_ylabel('Average Concentration (ppm)', fontsize=12)
         ax.set_title(title, fontsize=14, pad=10)
         ax.grid(True, alpha=0.3, linestyle='--')
         ax.tick_params(axis='both', labelsize=10)
@@ -272,9 +272,9 @@ class ResultVisualization:
                 y_coords.append(j)
                 concs.append(self.simulation.concentration[i, j])
         
-        df['X坐标'] = x_coords
-        df['Y坐标'] = y_coords
-        df['浓度(ppm)'] = concs
+        df['X_Coordinate'] = x_coords
+        df['Y_Coordinate'] = y_coords
+        df['Concentration_(ppm)'] = concs
         
         # 写入CSV
         df.to_csv(output, index=False, encoding='utf-8-sig')
@@ -659,3 +659,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
