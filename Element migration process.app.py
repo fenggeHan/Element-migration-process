@@ -61,8 +61,8 @@ class NumericalSimulation:
 
     def explicit_solver(self, diffusion_coeff: float, reaction_rate: float) -> np.ndarray:
         laplacian = (
-                (np.roll(self.concentration, -1, axis=1) + np.roll(self.concentration, 1, axis=1) - 2 * self.concentration) / self.dx ** 2 +
-                (np.roll(self.concentration, -1, axis=0) + np.roll(self.concentration, 1, axis=0) - 2 * self.concentration) / self.dy ** 2
+                (np.roll(self.concentration, -1, axis=1) + np.roll(self.concentration, 1, axis=1) - 2 * self.concentration) / self.dx**2 +
+                (np.roll(self.concentration, -1, axis=0) + np.roll(self.concentration, 1, axis=0) - 2 * self.concentration) / self.dy**2
         )
         diffusion_term = diffusion_coeff * laplacian
         reaction_term = -reaction_rate * self.concentration
@@ -78,14 +78,14 @@ class NumericalSimulation:
             for i in range(1, self.domain_size[0] - 1):
                 for j in range(1, self.domain_size[1] - 1):
                     mobility_factor = self.water_mobility * 1e-2
-                    # 核心修复：避免分母为0，增加数值稳定性
-                    denominator = 1 + self.dt * (2 * diffusion_coeff * (1/self.dx² + 1/self.dy²) + reaction_rate)
+                    # 核心修复：将²改为**2，避免语法错误
+                    denominator = 1 + self.dt * (2 * diffusion_coeff * (1/self.dx**2 + 1/self.dy**2) + reaction_rate)
                     if denominator < 1e-10:
                         denominator = 1e-10
                     new_concentration[i, j] = (
                         self.concentration[i, j] + self.dt * diffusion_coeff * (
-                            (self.concentration[i+1,j] + self.concentration[i-1,j])/self.dx² +
-                            (self.concentration[i,j+1] + self.concentration[i,j-1])/self.dy²
+                            (self.concentration[i+1,j] + self.concentration[i-1,j])/self.dx**2 +
+                            (self.concentration[i,j+1] + self.concentration[i,j-1])/self.dy**2
                         ) - mobility_factor * self.concentration[i,j]
                     ) / denominator
         # 强制确保浓度非负
