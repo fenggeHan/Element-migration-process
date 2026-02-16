@@ -483,7 +483,9 @@ def main():
                 # 中心点高浓度
                 center_x, center_y = sim.domain_size[0] // 2, sim.domain_size[1] // 2
                 sim.concentration[center_x - 5:center_x + 5, center_y - 5:center_y + 5] = initial_c * 10
+                # 关键修复：设置模拟对象的时间步长为场景预设值
                 sim.dt = scene_data["dt"]
+                # 清空之前的结果
                 st.session_state.sim_results = {}
                 st.success(f"成功加载：{scene_data['name']}")
             except Exception as e:
@@ -565,7 +567,8 @@ def main():
             st.session_state.params = {
                 "temperature": temperature,
                 "ph": ph,
-                "time_steps": time_steps,** additional_params
+                "time_steps": time_steps,
+                **additional_params
             }
 
             # 4. 运行模拟（容错）
@@ -660,7 +663,9 @@ def main():
 
             # 图表展示
             try:
-                vis = ResultVisualization(st.session_state.sim)
+                # 确保使用最新的模拟对象
+                sim = st.session_state.sim
+                vis = ResultVisualization(sim)
                 tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
                 with tab1:
                     contour_fig = vis.plot_contour()
@@ -683,7 +688,8 @@ def main():
             
             with col_excel:
                 try:
-                    vis = ResultVisualization(st.session_state.sim)
+                    sim = st.session_state.sim
+                    vis = ResultVisualization(sim)
                     excel_data = vis.export_excel()
                     if excel_data:
                         st.download_button(
@@ -700,7 +706,8 @@ def main():
             
             with col_vtk:
                 try:
-                    vis = ResultVisualization(st.session_state.sim)
+                    sim = st.session_state.sim
+                    vis = ResultVisualization(sim)
                     vtk_data = vis.export_vtk()
                     if vtk_data:
                         st.download_button(
