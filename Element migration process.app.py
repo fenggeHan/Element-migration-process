@@ -461,21 +461,12 @@ def main():
             "au_hydrothermal": "热液蚀变Au富集",
             "li_weathering": "风化淋滤Li流失"
         }
-        new_selected_scene_key = st.selectbox(
+        st.session_state.selected_scene_key = st.selectbox(
             "选择预设场景",
             options=list(scene_options.keys()),
             format_func=lambda x: scene_options[x],
             index=list(scene_options.keys()).index(st.session_state.selected_scene_key)
         )
-
-        # 关键修复：当场景选择改变时，自动重置会话状态
-        if new_selected_scene_key != st.session_state.selected_scene_key:
-            st.session_state.selected_scene_key = new_selected_scene_key
-            # 清空之前的结果，强制用户重新加载场景
-            st.session_state.sim_results = {}
-            st.session_state.current_scene = None
-            st.rerun()  # 立即刷新页面，确保状态更新
-
         selected_scene_key = st.session_state.selected_scene_key
 
         # 2. 加载场景（容错处理）
@@ -492,9 +483,7 @@ def main():
                 # 中心点高浓度
                 center_x, center_y = sim.domain_size[0] // 2, sim.domain_size[1] // 2
                 sim.concentration[center_x - 5:center_x + 5, center_y - 5:center_y + 5] = initial_c * 10
-                # 关键修复：设置模拟对象的时间步长为场景预设值
                 sim.dt = scene_data["dt"]
-                # 清空之前的结果
                 st.session_state.sim_results = {}
                 st.success(f"成功加载：{scene_data['name']}")
             except Exception as e:
@@ -576,8 +565,7 @@ def main():
             st.session_state.params = {
                 "temperature": temperature,
                 "ph": ph,
-                "time_steps": time_steps,
-                **additional_params
+                "time_steps": time_steps,** additional_params
             }
 
             # 4. 运行模拟（容错）
@@ -672,9 +660,7 @@ def main():
 
             # 图表展示
             try:
-                # 确保使用最新的模拟对象
-                sim = st.session_state.sim
-                vis = ResultVisualization(sim)
+                vis = ResultVisualization(st.session_state.sim)
                 tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
                 with tab1:
                     contour_fig = vis.plot_contour()
@@ -697,8 +683,7 @@ def main():
             
             with col_excel:
                 try:
-                    sim = st.session_state.sim
-                    vis = ResultVisualization(sim)
+                    vis = ResultVisualization(st.session_state.sim)
                     excel_data = vis.export_excel()
                     if excel_data:
                         st.download_button(
@@ -715,8 +700,7 @@ def main():
             
             with col_vtk:
                 try:
-                    sim = st.session_state.sim
-                    vis = ResultVisualization(sim)
+                    vis = ResultVisualization(st.session_state.sim)
                     vtk_data = vis.export_vtk()
                     if vtk_data:
                         st.download_button(
