@@ -11,25 +11,39 @@ import os
 import platform
 
 # ===================== 全局配置 =====================
+# 深度优化跨平台字体配置（解决中文显示问题）
 def setup_chinese_font():
-    """跨平台中文字体配置"""
+    """跨平台中文字体配置，自动检测可用字体"""
+    # 先清空字体缓存
     matplotlib.rcParams.update(matplotlib.rcParamsDefault)
+    
+    # Windows/Linux/macOS 字体优先级
     font_paths = {
         'Windows': ['SimHei', 'Microsoft YaHei', 'FangSong'],
         'Linux': ['WenQuanYi Micro Hei', 'DejaVu Sans'],
         'Darwin': ['PingFang SC', 'Heiti TC', 'Arial Unicode MS']
     }
+    
+    # 检测系统类型
     system = platform.system()
     candidate_fonts = font_paths.get(system, ['DejaVu Sans'])
+    
+    # 检测可用字体
     available_fonts = [f for f in candidate_fonts if f in plt.rcParams['font.sans-serif']]
-    plt.rcParams["font.family"] = available_fonts if available_fonts else ['DejaVu Sans']
+    if available_fonts:
+        plt.rcParams["font.family"] = available_fonts
+    else:
+        plt.rcParams["font.family"] = ['DejaVu Sans']
+    
+    # 基础配置
     plt.rcParams["font.size"] = 11
-    plt.rcParams["axes.unicode_minus"] = False
+    plt.rcParams["axes.unicode_minus"] = False  # 解决负号显示
     plt.rcParams["figure.dpi"] = 150
     plt.rcParams["savefig.dpi"] = 150
     plt.rcParams["figure.facecolor"] = "white"
     plt.rcParams["axes.facecolor"] = "white"
 
+# 初始化字体配置
 setup_chinese_font()
 
 st.set_page_config(
@@ -41,79 +55,99 @@ st.set_page_config(
 # ===================== 1. 数值模拟核心模块 =====================
 class NumericalSimulation:
     """基于有限差分法的元素迁移数值模拟核心类"""
+
     def __init__(self, domain_size: Tuple[int, int] = (50, 50), dx: float = 1.0, dy: float = 1.0, dt: float = 1.0):
-        self.domain_size = domain_size
-        self.dx, self.dy = dx, dy
-        self.dt = dt
-        self.concentration = np.zeros(domain_size)
-        self.time = 0.0
-        self.saturation_concentration = 1.0
-        self.water_mobility = 1.0
+        self.domain_size = domain_size  # 模拟域尺寸 (x, y)
+        self.dx, self.dy = dx, dy  # 空间步长
+        self.dt = dt  # 时间步长
+        self.concentration = np.zeros(domain_size)  # 元素浓度场
+        self.time = 0.0  # 当前模拟时间
+        self.saturation_concentration = 1.0  # 饱和浓度（用于水-岩反应）
+        self.water_mobility = 1.0  # 新增：水的流动性参数（影响Li流失速率）
 
     def central_difference_x(self, field: np.ndarray) -> np.ndarray:
+        """x方向中心差分计算梯度"""
         return (np.roll(field, -1, axis=1) - np.roll(field, 1, axis=1)) / (2 * self.dx)
 
     def central_difference_y(self, field: np.ndarray) -> np.ndarray:
+        """y方向中心差分计算梯度"""
         return (np.roll(field, -1, axis=0) - np.roll(field, 1, axis=0)) / (2 * self.dy)
 
     def forward_difference_time(self, field: np.ndarray, rate: np.ndarray) -> np.ndarray:
+        """时间向前差分更新"""
         return field + rate * self.dt
 
     def explicit_solver(self, diffusion_coeff: float, reaction_rate: float) -> np.ndarray:
+        """显式有限差分求解对流-扩散-反应方程"""
+        # 拉普拉斯算子（扩散项）
         laplacian = (
-                (np.roll(self.concentration, -1, axis=1) + np.roll(self.concentration, 1, axis=1) - 2 * self.concentration) / self.dx ** 2 +
-                (np.roll(self.concentration, -1, axis=0) + np.roll(self.concentration, 1, axis=0) - 2 * self.concentration) / self.dy ** 2
+                (np.roll(self.concentration, -1, axis=1) + np.roll(self.concentration, 1,
+                                                                   axis=1) - 2 * self.concentration) / self.dx ** 2 +
+                (np.roll(self.concentration, -1, axis=0) + np.roll(self.concentration, 1,
+                                                                   axis=0) - 2 * self.concentration) / self.dy ** 2
         )
         diffusion_term = diffusion_coeff * laplacian
-        reaction_term = -reaction_rate * self.concentration
+        reaction_term = -reaction_rate * self.concentration  # 反应项（简化为线性衰减）
+
+        # 更新浓度场
         self.concentration = self.forward_difference_time(self.concentration, diffusion_term + reaction_term)
         self.time += self.dt
+        # 确保浓度非负（物理意义约束）
         self.concentration = np.clip(self.concentration, 0, None)
         return self.concentration
 
     def implicit_solver(self, diffusion_coeff: float, reaction_rate: float, max_iter: int = 10) -> np.ndarray:
-        """隐式求解器（增加调试日志，确保浓度更新）"""
+        """隐式有限差分求解（Jacobi迭代）- 适配Li流失场景，加入水流动性影响"""
         new_concentration = self.concentration.copy()
         for _ in range(max_iter):
             for i in range(1, self.domain_size[0] - 1):
                 for j in range(1, self.domain_size[1] - 1):
+                    # 隐式格式离散，加入水流动性系数（放大Li流失速率）
                     mobility_factor = self.water_mobility * 1e-2
-                    # 核心修复：避免分母为0，增加数值稳定性
-                    denominator = 1 + self.dt * (2 * diffusion_coeff * (1/self.dx² + 1/self.dy²) + reaction_rate)
-                    if denominator < 1e-10:
-                        denominator = 1e-10
                     new_concentration[i, j] = (
-                        self.concentration[i, j] + self.dt * diffusion_coeff * (
-                            (self.concentration[i+1,j] + self.concentration[i-1,j])/self.dx² +
-                            (self.concentration[i,j+1] + self.concentration[i,j-1])/self.dy²
-                        ) - mobility_factor * self.concentration[i,j]
-                    ) / denominator
-        # 强制确保浓度非负
-        self.concentration = np.clip(new_concentration, 0, np.max(new_concentration))
+                                                      self.concentration[i, j] + self.dt * diffusion_coeff * (
+                                                      (self.concentration[i + 1, j] + self.concentration[
+                                                          i - 1, j]) / self.dx ** 2 +
+                                                      (self.concentration[i, j + 1] + self.concentration[
+                                                          i, j - 1]) / self.dy ** 2
+                                              ) - mobility_factor * self.concentration[i, j]
+                                              ) / (1 + self.dt * (
+                            2 * diffusion_coeff * (1 / self.dx ** 2 + 1 / self.dy ** 2) + reaction_rate))
+        self.concentration = new_concentration
+        self.concentration = np.clip(self.concentration, 0, None)
         self.time += self.dt
-        # 调试：打印隐式求解后的浓度范围
-        st.debug(f"隐式求解后浓度范围：min={np.min(self.concentration):.6f}, max={np.max(self.concentration):.6f}")
         return self.concentration
 
     def set_water_mobility(self, mobility: float):
+        """新增：设置水的流动性参数"""
         self.water_mobility = mobility
-        st.debug(f"水流动性参数已设置：{mobility}")
+
+    def water_rock_reaction(self, mineral_dissolution_rate: float, surface_area: float) -> float:
+        """水-岩相互作用：矿物溶解动力学模型"""
+        return mineral_dissolution_rate * surface_area * (1 - self.concentration / self.saturation_concentration)
+
+    def magma_crystallization(self, distribution_coefficient: float, melt_fraction: float) -> np.ndarray:
+        """岩浆结晶分异：瑞利结晶模型"""
+        return self.concentration * (1 - melt_fraction) ** (distribution_coefficient - 1)
 
     def reset_concentration(self):
+        """重置浓度场"""
         self.concentration = np.zeros(self.domain_size)
         self.time = 0.0
-        self.water_mobility = 1.0
-        st.debug("模拟对象已重置")
+        self.water_mobility = 1.0  # 重置水流动性
 
-# ===================== 2. 场景预设模块 =====================
+# ===================== 2. 场景预设与自定义模块 =====================
 class SceneManager:
+    """管理内置场景与自定义场景"""
+
     def __init__(self):
+        # 初始化所有场景参数（包含Li场景的water_mobility_range）
         self.scenes: Dict[str, Dict] = {
             "au_hydrothermal": {
                 "name": "热液蚀变Au富集",
-                "initial_concentration": 0.01,
+                "initial_concentration": 0.01,  # ppm
                 "temperature_range": (0, 1000),
-                "ph_range": (2.0, 8.0),
+                "ph_range": (2.0, 8.0),  # 保持原有范围
                 "pressure_range": (10, 1000),
                 "eh_range": (-200, 400),
                 "sulfur_content_range": (0.01, 1.0),
@@ -126,14 +160,14 @@ class SceneManager:
             },
             "li_weathering": {
                 "name": "风化淋滤Li流失",
-                "initial_concentration": 50,
-                "ph_range": (0.0, 12.0),
+                "initial_concentration": 50,  # ppm
+                "ph_range": (0.0, 12.0),  # PH范围拓展至0-12
                 "temperature_range": (0, 1000),
                 "pressure_range": (10, 1000),
                 "eh_range": (-200, 400),
                 "sulfur_content_range": (0.01, 1.0),
                 "chlorine_content_range": (0.1, 10.0),
-                "water_mobility_range": (0.1, 10.0),
+                "water_mobility_range": (0.1, 10.0),  # 水流动性参数范围（必加）
                 "time_range": (1000, 100000),
                 "dt": 100.0,
                 "diffusion_coeff": 1e-7,
@@ -143,6 +177,8 @@ class SceneManager:
         }
 
     def get_scene(self, scene_name: str) -> Dict:
+        """安全获取场景参数，返回完整默认值避免KeyError"""
+        # 基础默认值
         default_scene = {
             "name": "未知场景",
             "initial_concentration": 0.01,
@@ -152,36 +188,49 @@ class SceneManager:
             "eh_range": (-200, 400),
             "sulfur_content_range": (0.01, 1.0),
             "chlorine_content_range": (0.1, 10.0),
-            "water_mobility_range": (0.1, 10.0),
+            "water_mobility_range": (0.1, 10.0),  # 全局默认值
             "time_range": (100, 20000),
             "dt": 1.0,
             "diffusion_coeff": 1e-6,
             "reaction_rate": 1e-4,
             "solver_type": "explicit"
         }
+        
+        # 合并场景特有参数
         scene = self.scenes.get(scene_name, {})
         for key in default_scene:
             scene.setdefault(key, default_scene[key])
+        
         return scene
 
-# ===================== 3. 结果可视化模块 =====================
+    def create_custom_scene(self, name: str, params: Dict) -> Dict:
+        """创建自定义场景"""
+        self.scenes[name] = params
+        return self.scenes[name]
+
+# ===================== 3. 结果可视化与分析模块 =====================
 class ResultVisualization:
+    """结果可视化与分析工具（彻底修复导出数据格式错误）"""
+
     def __init__(self, simulation: NumericalSimulation):
         self.simulation = simulation
         setup_chinese_font()
 
     def plot_contour(self, title: str = "浓度等值线图") -> plt.Figure:
+        """重构等值线图绘制逻辑"""
         setup_chinese_font()
         fig, ax = plt.subplots(figsize=(10, 8), dpi=150, facecolor="white")
         fig.suptitle("Concentration Contour Map", fontsize=14, fontweight='bold')
 
-        # 修复：确保浓度数据有梯度
+        # 生成浓度等值线（确保梯度可见）
         min_c = np.min(self.simulation.concentration)
         max_c = np.max(self.simulation.concentration)
         if max_c - min_c < 1e-6:
-            max_c = min_c + 10.0  # 强制生成梯度
-        levels = np.linspace(min_c, max_c, 20)
+            levels = np.linspace(min_c, min_c + 5.0, 20)
+        else:
+            levels = np.linspace(min_c, max_c, 20)
 
+        # 绘制填充等值线
         contour = ax.contourf(
             self.simulation.concentration,
             levels=levels,
@@ -196,24 +245,24 @@ class ResultVisualization:
             linewidths=0.5,
             alpha=0.5
         )
+
+        # 添加颜色条
         cbar = fig.colorbar(contour, ax=ax, label='Concentration (ppm)', shrink=0.8)
         cbar.ax.set_ylabel('Concentration (ppm)', fontsize=10)
+
+        # 设置坐标轴
         ax.set_xlabel('Spatial Coordinate X', fontsize=12)
         ax.set_ylabel('Spatial Coordinate Y', fontsize=12)
         ax.tick_params(axis='both', labelsize=10)
         plt.tight_layout()
+        
         return fig
 
-    def plot_time_series(self, time_points: List[float], concentrations: List[float], title: str = "浓度-时间曲线") -> plt.Figure:
-        """修复：处理空数据情况"""
+    def plot_time_series(self, time_points: List[float], concentrations: List[float],
+                         title: str = "浓度-时间曲线") -> plt.Figure:
+        """绘制浓度随时间变化曲线"""
         setup_chinese_font()
         fig, ax = plt.subplots(figsize=(10, 4), dpi=150, facecolor="white")
-        
-        # 修复：如果数据为空，生成默认数据
-        if not time_points or not concentrations:
-            time_points = [0, 1000, 2000]
-            concentrations = [50, 40, 30]  # Li流失默认趋势
-            st.warning("时间/浓度数据为空，使用默认数据绘图")
         
         ax.plot(time_points, concentrations, 'b-', linewidth=2, alpha=0.8)
         ax.set_xlabel('Time', fontsize=12)
@@ -222,26 +271,27 @@ class ResultVisualization:
         ax.grid(True, alpha=0.3, linestyle='--')
         ax.tick_params(axis='both', labelsize=10)
         plt.tight_layout()
+        
         return fig
 
     def calculate_enrichment_factor(self, initial_concentration: float) -> float:
+        """计算元素富集/流失系数"""
         max_concentration = np.max(self.simulation.concentration)
-        # 修复：避免除以0
-        if initial_concentration <= 0:
-            return 0.0
-        factor = max_concentration / initial_concentration
+        factor = max_concentration / initial_concentration if initial_concentration > 0 else 0.0
+        # Li流失场景返回流失系数
         if "li_weathering" in st.session_state.get("current_scene", {}).get("name", ""):
-            # 修复：Li流失系数计算，避免无穷大
-            return 1.0 / factor if factor > 0 else 100.0
+            return 1.0 / factor if factor > 0 else 0.0
         return factor
 
     def export_excel(self) -> bytes:
+        """修复Excel导出格式：返回纯bytes而非BytesIO"""
         try:
             import openpyxl
         except ImportError:
             st.error("缺少Excel依赖：pip install openpyxl")
             return b""
         
+        # 构建数据
         x_coords, y_coords, concs = [], [], []
         nx, ny = self.simulation.domain_size
         for i in range(nx):
@@ -256,12 +306,13 @@ class ResultVisualization:
             '浓度(ppm)': concs
         })
         
+        # 核心修复：写入BytesIO后读取为纯bytes
         output = BytesIO()
         try:
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='浓度数据', index=False)
             output.seek(0)
-            excel_data = output.getvalue()
+            excel_data = output.getvalue()  # 转为bytes类型
             output.close()
             return excel_data
         except Exception as e:
@@ -269,9 +320,11 @@ class ResultVisualization:
             return b""
 
     def export_vtk(self) -> str:
+        """修复VTK导出格式：返回纯字符串而非StringIO"""
         nx, ny = self.simulation.domain_size
         n_points = nx * ny
         
+        # 构建VTK内容（纯字符串）
         vtk_content = f"""# vtk DataFile Version 3.0
 Geochemical Element Migration Simulation
 ASCII
@@ -283,14 +336,17 @@ POINT_DATA {n_points}
 SCALARS concentration float 1
 LOOKUP_TABLE default
 """
+        # 写入浓度数据
         for j in range(ny):
             for i in range(nx):
                 vtk_content += f"{self.simulation.concentration[i, j]:.6f}\n"
         
-        return vtk_content
+        return vtk_content  # 直接返回字符串
 
-# ===================== 4. 教学管理模块 =====================
+# ===================== 4. 教学管理模块（保留） =====================
 class TeachingManagement:
+    """教学任务管理与数据统计"""
+
     def __init__(self):
         self.tasks: Dict[str, Dict] = {}
         self.student_data: Dict[str, List[str]] = {}
@@ -352,14 +408,17 @@ class TeachingManagement:
             "提交记录数": len(submissions)
         }
 
-# ===================== 5. 会话状态初始化 =====================
+# ===================== 5. 会话状态初始化（核心修复） =====================
 def init_session_state():
+    """安全初始化所有会话状态，避免未定义错误"""
+    # 初始化核心对象
     if "sim" not in st.session_state:
         st.session_state.sim = NumericalSimulation(domain_size=(50, 50), dx=1.0, dy=1.0, dt=1.0)
     if "scene_manager" not in st.session_state:
         st.session_state.scene_manager = SceneManager()
     if "teaching_manager" not in st.session_state:
         st.session_state.teaching_manager = TeachingManagement()
+        # 初始化教学任务
         st.session_state.teaching_manager.create_task(
             task_id="GEOCHEM_TASK_001",
             scene_name="au_hydrothermal",
@@ -374,6 +433,7 @@ def init_session_state():
             },
             deadline="2024-12-31"
         )
+    # 初始化场景和参数
     if "current_scene" not in st.session_state:
         st.session_state.current_scene = st.session_state.scene_manager.get_scene("au_hydrothermal")
     if "sim_results" not in st.session_state:
@@ -383,26 +443,20 @@ def init_session_state():
     if "selected_scene_key" not in st.session_state:
         st.session_state.selected_scene_key = "au_hydrothermal"
 
-# ===================== 6. 主界面逻辑（核心修复） =====================
+# ===================== 6. 主界面逻辑（全容错修复） =====================
 def main():
+    # 优先初始化会话状态
     init_session_state()
 
-    # 调试面板（可选显示）
-    with st.expander("🔍 调试信息（点击展开）", expanded=False):
-        st.write("**会话状态检查**")
-        st.write(f"- 当前场景：{st.session_state.get('selected_scene_key', '未选择')}")
-        st.write(f"- sim_results是否为空：{len(st.session_state.get('sim_results', {})) == 0}")
-        st.write(f"- sim_results内容：{st.session_state.get('sim_results', {})}")
-        st.write(f"- 模拟对象dt：{st.session_state.sim.dt if 'sim' in st.session_state else '未初始化'}")
-        st.write(f"- 初始浓度：{st.session_state.current_scene.get('initial_concentration', '未知') if 'current_scene' in st.session_state else '未知'}")
-
+    # 页面标题
     st.title("🌍 地球化学元素迁移虚拟仿真平台")
     st.divider()
 
+    # 左侧：场景选择与参数配置
     with st.sidebar:
         st.header("🔧 实验配置")
 
-        # 1. 场景选择
+        # 1. 场景选择（绑定会话状态）
         scene_options = {
             "au_hydrothermal": "热液蚀变Au富集",
             "li_weathering": "风化淋滤Li流失"
@@ -414,57 +468,71 @@ def main():
             index=list(scene_options.keys()).index(st.session_state.selected_scene_key)
         )
 
-        # 核心修复：场景切换时强制重置
+        # 关键修复：当场景选择改变时，自动重置会话状态
         if new_selected_scene_key != st.session_state.selected_scene_key:
             st.session_state.selected_scene_key = new_selected_scene_key
+            # 清空之前的结果，强制用户重新加载场景
             st.session_state.sim_results = {}
             st.session_state.current_scene = None
-            st.rerun()
+            st.rerun()  # 立即刷新页面，确保状态更新
 
         selected_scene_key = st.session_state.selected_scene_key
 
-        # 2. 加载场景
+        # 2. 加载场景（容错处理）
         if st.button("加载场景", type="primary"):
             try:
+                # 安全获取场景，确保有完整默认值
                 scene_data = st.session_state.scene_manager.get_scene(selected_scene_key)
                 st.session_state.current_scene = scene_data
-                
-                # 重置并初始化模拟对象
+                # 重置模拟对象
                 sim = st.session_state.sim
                 sim.reset_concentration()
-                initial_c = scene_data["initial_concentration"]
+                initial_c = scene_data["initial_concentration"]  # 此时必有值
                 sim.concentration = np.full(sim.domain_size, initial_c)
+                # 中心点高浓度
                 center_x, center_y = sim.domain_size[0] // 2, sim.domain_size[1] // 2
-                sim.concentration[center_x-5:center_x+5, center_y-5:center_y+5] = initial_c * 10
-                sim.dt = scene_data["dt"]  # 关键：设置正确的时间步长
-                
+                sim.concentration[center_x - 5:center_x + 5, center_y - 5:center_y + 5] = initial_c * 10
+                # 关键修复：设置模拟对象的时间步长为场景预设值
+                sim.dt = scene_data["dt"]
+                # 清空之前的结果
                 st.session_state.sim_results = {}
                 st.success(f"成功加载：{scene_data['name']}")
-                st.debug(f"加载场景后初始浓度：min={np.min(sim.concentration):.2f}, max={np.max(sim.concentration):.2f}")
             except Exception as e:
                 st.error(f"加载场景出错：{str(e)}")
-                st.exception(e)  # 显示完整异常栈
 
         st.divider()
 
-        # 3. 参数调整
+        # 3. 参数调整（核心：所有参数都有默认值，无KeyError）
         current_scene = st.session_state.current_scene
         if current_scene:
             st.subheader("⚙️ 参数调整")
 
-            # 温度
+            # 温度（通用参数）
             temp_range = current_scene["temperature_range"]
             default_temp = 300 if selected_scene_key == "au_hydrothermal" else 25
-            temperature = st.slider("温度 (℃)", temp_range[0], temp_range[1], default_temp, 10)
+            temperature = st.slider(
+                "温度 (℃)",
+                min_value=temp_range[0],
+                max_value=temp_range[1],
+                value=default_temp,
+                step=10
+            )
             
             # PH值
             ph_range = current_scene["ph_range"]
             default_ph = 5.0 if selected_scene_key == "au_hydrothermal" else 7.0
-            ph = st.slider("pH值", ph_range[0], ph_range[1], default_ph, 0.1)
+            ph = st.slider(
+                "pH值",
+                min_value=ph_range[0],
+                max_value=ph_range[1],
+                value=default_ph,
+                step=0.1
+            )
 
             # 场景专属参数
             additional_params = {}
             if selected_scene_key == "au_hydrothermal":
+                # Au场景参数
                 pressure_range = current_scene["pressure_range"]
                 eh_range = current_scene["eh_range"]
                 sulfur_range = current_scene["sulfur_content_range"]
@@ -482,7 +550,7 @@ def main():
                     "chlorine_content": chlorine_content
                 }
             elif selected_scene_key == "li_weathering":
-                # Li场景：水流动性参数
+                # Li场景：水流动性参数（此时必有值）
                 mobility_range = current_scene["water_mobility_range"]
                 water_mobility = st.slider(
                     "水的流动性（降水和水流）",
@@ -508,10 +576,11 @@ def main():
             st.session_state.params = {
                 "temperature": temperature,
                 "ph": ph,
-                "time_steps": time_steps,** additional_params
+                "time_steps": time_steps,
+                **additional_params
             }
 
-            # 4. 运行模拟（核心修复）
+            # 4. 运行模拟（容错）
             if st.button("▶️ 运行模拟"):
                 try:
                     with st.spinner("正在执行数值模拟..."):
@@ -519,7 +588,7 @@ def main():
                         scene = st.session_state.current_scene
                         params = st.session_state.params
 
-                        # 关键：设置水流动性参数
+                        # Li场景设置水流动性
                         if selected_scene_key == "li_weathering" and "water_mobility" in params:
                             sim.set_water_mobility(params["water_mobility"])
 
@@ -531,54 +600,49 @@ def main():
                         diffusion_coeff = scene["diffusion_coeff"]
                         reaction_rate = scene["reaction_rate"]
 
-                        # 执行模拟（增加调试）
+                        # 执行模拟
                         progress_bar = st.progress(0)
                         steps = int(params["time_steps"])
                         record_interval = max(1, steps // 100) if steps > 100 else 1
-                        
-                        # 修复：确保至少记录一次数据
                         for step in range(steps):
                             solver(diffusion_coeff, reaction_rate)
-                            if step % record_interval == 0 or step == steps-1:  # 最后一步强制记录
+                            if step % record_interval == 0:
                                 time_points.append(sim.time)
                                 avg_concentrations.append(np.mean(sim.concentration))
                             progress_bar.progress((step + 1) / steps)
                         progress_bar.empty()
 
-                        # 生成结果（增加容错）
+                        # 生成结果
                         vis = ResultVisualization(sim)
                         initial_c = scene["initial_concentration"]
                         enrichment_factor = vis.calculate_enrichment_factor(initial_c)
 
-                        # 核心：确保sim_results有值
+                        # 保存结果
                         st.session_state.sim_results = {
                             "enrichment_factor": enrichment_factor,
                             "simulation_time": sim.time,
-                            "time_points": time_points if time_points else [0.0, sim.time],
-                            "avg_concentrations": avg_concentrations if avg_concentrations else [initial_c, np.mean(sim.concentration)],
+                            "time_points": time_points if time_points else [0.0],
+                            "avg_concentrations": avg_concentrations if avg_concentrations else [initial_c],
                             "scene_name": scene["name"],
                             "water_mobility": params.get("water_mobility", 1.0),
                             "max_concentration": np.max(sim.concentration)
                         }
 
                         st.success("模拟完成！结果已展示在主界面")
-                        # 调试：打印结果
-                        st.debug(f"模拟结果：{st.session_state.sim_results}")
                 except Exception as e:
                     st.error(f"模拟出错：{str(e)}")
-                    st.exception(e)  # 显示完整异常
-                    # 兜底：设置默认结果
+                    # 模拟失败时赋值基础结果
                     st.session_state.sim_results = {
                         "enrichment_factor": 0.0,
                         "simulation_time": 0.0,
-                        "time_points": [0.0, 1000],
-                        "avg_concentrations": [50.0, 40.0],
+                        "time_points": [0.0],
+                        "avg_concentrations": [0.0],
                         "scene_name": scene["name"],
                         "water_mobility": params.get("water_mobility", 1.0),
                         "max_concentration": 0.0
                     }
 
-    # 结果展示（核心修复）
+    # 右侧：结果展示（全容错）
     st.header("📊 模拟结果展示")
 
     if not st.session_state.current_scene:
@@ -588,26 +652,27 @@ def main():
         if not sim_results:
             st.info(f"已加载【{st.session_state.current_scene['name']}】场景，请点击左侧「运行模拟」按钮生成结果")
         else:
-            # 核心指标展示（增加容错）
+            # 核心指标
             col1, col2, col3, col4 = st.columns(4)
             with col1:
                 metric_label = "流失系数" if selected_scene_key == "li_weathering" else "富集系数"
-                st.metric(metric_label, f"{sim_results.get('enrichment_factor', 0.0):.2f}")
+                st.metric(metric_label, f"{sim_results['enrichment_factor']:.2f}")
             with col2:
-                st.metric("总模拟时间", f"{sim_results.get('simulation_time', 0.0):.0f}")
+                st.metric("总模拟时间", f"{sim_results['simulation_time']:.0f}")
             with col3:
-                st.metric("最高浓度", f"{sim_results.get('max_concentration', 0.0):.4f} ppm")
+                st.metric("最高浓度", f"{sim_results['max_concentration']:.4f} ppm")
             with col4:
-                st.metric("场景名称", sim_results.get('scene_name', '未知'))
+                st.metric("场景名称", sim_results['scene_name'])
 
-            # Li场景额外显示
+            # Li场景额外显示水流动性
             if selected_scene_key == "li_weathering":
-                st.metric("水的流动性", f"{sim_results.get('water_mobility', 1.0):.1f}")
+                st.metric("水的流动性", f"{sim_results['water_mobility']:.1f}")
 
             st.divider()
 
-            # 图表展示（增加容错）
+            # 图表展示
             try:
+                # 确保使用最新的模拟对象
                 sim = st.session_state.sim
                 vis = ResultVisualization(sim)
                 tab1, tab2 = st.tabs(["浓度等值线图", "浓度-时间曲线"])
@@ -616,18 +681,17 @@ def main():
                     st.pyplot(contour_fig)
                 with tab2:
                     time_fig = vis.plot_time_series(
-                        sim_results.get('time_points', [0, 1000]),
-                        sim_results.get('avg_concentrations', [50, 40])
+                        sim_results['time_points'],
+                        sim_results['avg_concentrations']
                     )
                     st.pyplot(time_fig)
             except Exception as e:
                 st.error(f"图表生成出错：{str(e)}")
-                st.exception(e)
-                st.info(f"核心数据：平均浓度 {np.mean(sim_results.get('avg_concentrations', [0])):.4f} ppm")
+                st.info(f"核心数据：平均浓度 {np.mean(sim_results['avg_concentrations']):.4f} ppm")
 
             st.divider()
 
-            # 数据导出（增加容错）
+            # 数据导出（无格式错误）
             st.subheader("💾 数据导出")
             col_excel, col_vtk = st.columns(2)
             
@@ -640,7 +704,7 @@ def main():
                         st.download_button(
                             label="导出Excel数据",
                             data=excel_data,
-                            file_name=f"{sim_results.get('scene_name', '未知场景')}_浓度数据.xlsx",
+                            file_name=f"{sim_results['scene_name']}_浓度数据.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="excel_btn"
                         )
@@ -658,7 +722,7 @@ def main():
                         st.download_button(
                             label="导出VTK数据",
                             data=vtk_data,
-                            file_name=f"{sim_results.get('scene_name', '未知场景')}_浓度数据.vtk",
+                            file_name=f"{sim_results['scene_name']}_浓度数据.vtk",
                             mime="text/plain",
                             key="vtk_btn"
                         )
@@ -667,11 +731,12 @@ def main():
                 except Exception as e:
                     st.error(f"VTK导出出错：{str(e)}")
 
+# ===================== 运行程序（全局容错） =====================
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
         st.error(f"程序运行出错：{str(e)}")
-        st.exception(e)
+        # 重置会话状态
         st.session_state.clear()
         st.info("已重置会话状态，请刷新页面重新运行")
