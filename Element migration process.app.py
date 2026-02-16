@@ -461,12 +461,21 @@ def main():
             "au_hydrothermal": "热液蚀变Au富集",
             "li_weathering": "风化淋滤Li流失"
         }
-        st.session_state.selected_scene_key = st.selectbox(
+        new_selected_scene_key = st.selectbox(
             "选择预设场景",
             options=list(scene_options.keys()),
             format_func=lambda x: scene_options[x],
             index=list(scene_options.keys()).index(st.session_state.selected_scene_key)
         )
+
+        # 关键修复：当场景选择改变时，自动重置会话状态
+        if new_selected_scene_key != st.session_state.selected_scene_key:
+            st.session_state.selected_scene_key = new_selected_scene_key
+            # 清空之前的结果，强制用户重新加载场景
+            st.session_state.sim_results = {}
+            st.session_state.current_scene = None
+            st.rerun()  # 立即刷新页面，确保状态更新
+
         selected_scene_key = st.session_state.selected_scene_key
 
         # 2. 加载场景（容错处理）
