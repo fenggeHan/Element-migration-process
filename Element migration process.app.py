@@ -598,7 +598,6 @@ def main():
                             "simulation_time": sim.time,
                             "time_points": time_points if time_points else [0.0],  # 兜底空列表
                             "avg_concentrations": avg_concentrations if avg_concentrations else [initial_c],  # 兜底初始浓度
-                            "scene_name": scene.get("name", "风化淋滤Li流失"),  # Li场景强制赋值名称
                             "water_mobility": params.get("water_mobility", 1.0),
                             "max_concentration": np.max(sim.concentration),
                             "min_concentration": np.min(sim.concentration)
@@ -613,7 +612,6 @@ def main():
                         "simulation_time": 0.0,
                         "time_points": [0.0],
                         "avg_concentrations": [0.0],
-                        "scene_name": current_scene.get("name", "风化淋滤Li流失"),
                         "water_mobility": params.get("water_mobility", 1.0),
                         "max_concentration": 0.0,
                         "min_concentration": 0.0
@@ -642,7 +640,8 @@ def main():
                 max_c = sim_results.get("max_concentration", 0.0)
                 st.metric("最高浓度", f"{max_c:.4f} ppm")
             with col4:
-                st.metric("场景名称", sim_results.get('scene_name', '风化淋滤Li流失'))
+                # 修复1：场景名称从当前加载的场景获取，而非历史模拟结果
+                st.metric("场景名称", st.session_state.current_scene.get('name', '未知场景'))
 
             # Li场景额外显示水流动性（强制显示，避免缺失）
             if selected_scene_key == "li_weathering":
@@ -672,7 +671,7 @@ def main():
 
             st.divider()
 
-            # 数据导出（彻底修复Invalid binary data format错误）
+            # 数据导出（彻底修复Invalid binary data format错误 + 修复文件名）
             st.subheader("💾 数据导出")
             col_excel, col_vtk = st.columns(2)
             
@@ -681,7 +680,8 @@ def main():
                     vis = ResultVisualization(st.session_state.sim)
                     excel_bytes = vis.export_excel()  # 返回纯bytes
                     if excel_bytes:
-                        scene_name = sim_results.get('scene_name', 'Li流失模拟').replace(" ", "_")
+                        # 修复2：导出文件名从当前加载的场景获取
+                        scene_name = st.session_state.current_scene.get('name', '模拟结果').replace(" ", "_")
                         st.download_button(
                             label="导出Excel数据",
                             data=excel_bytes,  # 直接传纯字节数据
@@ -699,7 +699,8 @@ def main():
                     vis = ResultVisualization(st.session_state.sim)
                     vtk_str = vis.export_vtk()  # 返回纯字符串
                     if vtk_str:
-                        scene_name = sim_results.get('scene_name', 'Li流失模拟').replace(" ", "_")
+                        # 修复3：导出文件名从当前加载的场景获取
+                        scene_name = st.session_state.current_scene.get('name', '模拟结果').replace(" ", "_")
                         st.download_button(
                             label="导出VTK数据",
                             data=vtk_str,  # 直接传纯字符串
